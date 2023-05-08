@@ -1,4 +1,4 @@
-use super::ElementsBase;
+use super::Iter;
 use crate::imp_prelude::*;
 use crate::IntoDimension;
 use crate::Layout;
@@ -77,7 +77,7 @@ where
     type IntoIter = WindowsIter<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
         WindowsIter {
-            iter: self.base.into_elements_base(),
+            iter: self.base.into_iter(),
             window: self.window,
             strides: self.strides,
         }
@@ -88,15 +88,15 @@ where
 ///
 /// See [`.windows()`](ArrayBase::windows) for more
 /// information.
-pub struct WindowsIter<'a, A, D> {
-    iter: ElementsBase<'a, A, D>,
+pub struct WindowsIter<'a, A, D: Dimension> {
+    iter: Iter<'a, A, D>,
     window: D,
     strides: D,
 }
 
 impl_iterator! {
     ['a, A, D: Dimension]
-    [Clone => 'a, A, D: Clone]
+    [Clone => 'a, A, D: Clone + Dimension]
     WindowsIter {
         iter,
         window,

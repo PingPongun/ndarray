@@ -12,7 +12,8 @@ use std::mem::MaybeUninit;
 
 use crate::imp_prelude::*;
 
-use crate::{Baseiter, ElementsBase, ElementsBaseMut, Iter, IterMut};
+use crate::iterators::BIItemT;
+use crate::BaseIter;
 
 use crate::dimension::offset_from_low_addr_ptr_to_logical_ptr;
 use crate::iter::{self, AxisIter, AxisIterMut};
@@ -189,17 +190,8 @@ where
     D: Dimension,
 {
     #[inline]
-    pub(crate) fn into_base_iter(self) -> Baseiter<A, D> {
-        unsafe { Baseiter::new(self.ptr.as_ptr(), self.dim, self.strides) }
-    }
-
-    #[inline]
-    pub(crate) fn into_elements_base(self) -> ElementsBase<'a, A, D> {
-        ElementsBase::new(self)
-    }
-
-    pub(crate) fn into_iter_(self) -> Iter<'a, A, D> {
-        Iter::new(self)
+    pub(crate) fn into_iter<const IDX:bool,IdxA: BIItemT<A, D, IDX,Inner = () >>(self) -> BaseIter<A, D,IDX, IdxA> {
+        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
     }
 
     /// Return an outer iterator for this view.
@@ -228,13 +220,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_base_iter(self) -> Baseiter<A, D> {
-        unsafe { Baseiter::new(self.ptr.as_ptr(), self.dim, self.strides) }
-    }
-
-    #[inline]
-    pub(crate) fn into_elements_base(self) -> ElementsBaseMut<'a, A, D> {
-        ElementsBaseMut::new(self)
+    pub(crate) fn into_iter<const IDX:bool,IdxA: BIItemT<A, D, IDX ,Inner = ()>>(self) -> BaseIter<A, D,IDX, IdxA> {
+        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
     }
 
     /// Return the array’s data as a slice, if it is contiguous and in standard order.
@@ -261,10 +248,6 @@ where
         } else {
             Err(self)
         }
-    }
-
-    pub(crate) fn into_iter_(self) -> IterMut<'a, A, D> {
-        IterMut::new(self)
     }
 
     /// Return an outer iterator for this view.

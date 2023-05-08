@@ -101,7 +101,7 @@ where
 }
 
 // private iterator wrapper
-struct Sequence<'a, A, D>(Iter<'a, A, D>);
+struct Sequence<'a, A, D: Dimension>(Iter<'a, A, D>);
 
 impl<'a, A, D> Serialize for Sequence<'a, A, D>
 where

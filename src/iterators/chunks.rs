@@ -1,6 +1,6 @@
 use crate::imp_prelude::*;
-use crate::ElementsBase;
-use crate::ElementsBaseMut;
+use crate::Iter;
+use crate::IterMut;
 use crate::IntoDimension;
 use crate::{Layout, NdProducer};
 
@@ -79,7 +79,7 @@ where
     type IntoIter = ExactChunksIter<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
         ExactChunksIter {
-            iter: self.base.into_elements_base(),
+            iter: self.base.into_iter(),
             chunk: self.chunk,
             inner_strides: self.inner_strides,
         }
@@ -90,8 +90,8 @@ where
 ///
 /// See [`.exact_chunks()`](ArrayBase::exact_chunks) for more
 /// information.
-pub struct ExactChunksIter<'a, A, D> {
-    iter: ElementsBase<'a, A, D>,
+pub struct ExactChunksIter<'a, A, D: Dimension> {
+    iter: Iter<'a, A, D>,
     chunk: D,
     inner_strides: D,
 }
@@ -169,7 +169,7 @@ where
     type IntoIter = ExactChunksIterMut<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
         ExactChunksIterMut {
-            iter: self.base.into_elements_base(),
+            iter: self.base.into_iter(),
             chunk: self.chunk,
             inner_strides: self.inner_strides,
         }
@@ -178,7 +178,7 @@ where
 
 impl_iterator! {
     ['a, A, D: Dimension]
-    [Clone => 'a, A, D: Clone]
+    [Clone => 'a, A, D: Clone + Dimension]
     ExactChunksIter {
         iter,
         chunk,
@@ -240,8 +240,8 @@ impl_iterator! {
 ///
 /// See [`.exact_chunks_mut()`](ArrayBase::exact_chunks_mut)
 /// for more information.
-pub struct ExactChunksIterMut<'a, A, D> {
-    iter: ElementsBaseMut<'a, A, D>,
+pub struct ExactChunksIterMut<'a, A, D: Dimension> {
+    iter: IterMut<'a, A, D>,
     chunk: D,
     inner_strides: D,
 }

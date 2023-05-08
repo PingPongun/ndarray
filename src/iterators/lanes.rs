@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use super::LanesIter;
 use super::LanesIterMut;
 use crate::imp_prelude::*;
@@ -82,11 +80,13 @@ where
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = LanesIter<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
-        LanesIter {
-            iter: self.base.into_base_iter(),
-            inner_len: self.inner_len,
-            inner_stride: self.inner_stride,
-            life: PhantomData,
+        unsafe {
+            LanesIter::new(
+                self.base.ptr.as_ptr(),
+                self.base.dim,
+                self.base.strides,
+                (Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
+            )
         }
     }
 }
@@ -132,11 +132,13 @@ where
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = LanesIterMut<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
-        LanesIterMut {
-            iter: self.base.into_base_iter(),
-            inner_len: self.inner_len,
-            inner_stride: self.inner_stride,
-            life: PhantomData,
+        unsafe {
+            LanesIterMut::new(
+                self.base.ptr.as_ptr(),
+                self.base.dim,
+                self.base.strides,
+                (Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
+            )
         }
     }
 }

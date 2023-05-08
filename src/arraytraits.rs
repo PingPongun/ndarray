@@ -236,7 +236,7 @@ where
     type IntoIter = Iter<'a, A, D>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_iter_()
+        self.into_iter()
     }
 }
 
@@ -248,7 +248,7 @@ where
     type IntoIter = IterMut<'a, A, D>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_iter_()
+        self.into_iter()
     }
 }
 

@@ -186,7 +186,7 @@ pub trait Dimension:
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let mut carry = jump_by;
         for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev() {
@@ -202,21 +202,21 @@ pub trait Dimension:
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_unchecked(&self, index: &mut Self) {
         for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev() {
             *ix += 1;
-            if *ix == dim {
-                *ix = 0;
-            } else {
+            if *ix != dim {
                 return;
+            } else {
+                *ix = 0;
             }
         }
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let mut carry = jump_by;
         for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev() {
@@ -234,16 +234,52 @@ pub trait Dimension:
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return first index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_unchecked(&self, index: &mut Self) {
         for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev() {
-            if 0 == *ix {
-                *ix = dim - 1;
-            } else {
+            if 0 != *ix {
                 *ix -= 1;
-                break;
+                return;
+            } else {
+                *ix = dim - 1;
             }
         }
+    }
+    #[doc(hidden)]
+    /// same as `jump_index_unchecked` but ignores least significant dim
+    #[inline(always)]
+    fn jump_h_index_unchecked(&self, index: &mut Self) {
+        for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev().skip(1) {
+            *ix += 1;
+            if *ix != dim {
+                return;
+            } else {
+                *ix = 0;
+            }
+        }
+    }
+    #[doc(hidden)]
+    /// same as `jump_index_back_unchecked` but ignores least significant dim
+    #[inline(always)]
+    fn jump_h_index_back_unchecked(&self, index: &mut Self) {
+        for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev().skip(1) {
+            if 0 != *ix {
+                *ix -= 1;
+                return;
+            } else {
+                *ix = dim - 1;
+            }
+        }
+    }
+    #[inline(always)]
+    fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
+        let mut contig_stride = 1;
+        let mut nret = false;
+        for (&dim, &s) in izip!(self.slice().iter().rev(), strides.slice().iter().rev()) {
+            nret |= dim != 1 && s != contig_stride;
+            contig_stride *= dim;
+        }
+        !nret
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after `index`
@@ -317,6 +353,16 @@ pub trait Dimension:
         }
         offset
     }
+    #[doc(hidden)]
+    /// Return stride offset for index (as if index.last_elem()==0).
+    #[inline]
+    fn stride_h_offset(index: &Self, strides: &Self) -> isize {
+        let mut offset = 0;
+        for (&i, &s) in index.slice().iter().zip(strides.slice()).rev().skip(1) {
+            offset += stride_offset(i, s);
+        }
+        offset
+    }
 
     #[doc(hidden)]
     /// Return stride offset for this dimension and index.
@@ -325,6 +371,7 @@ pub trait Dimension:
     }
 
     #[doc(hidden)]
+    #[inline(always)]
     fn last_elem(&self) -> usize {
         if self.ndim() == 0 {
             0
@@ -334,9 +381,26 @@ pub trait Dimension:
     }
 
     #[doc(hidden)]
+    #[inline(always)]
+    fn last_elem_mut(&mut self) -> &mut usize {
+        let nd = self.ndim();
+        &mut self.slice_mut()[nd - 1]
+    }
+    #[doc(hidden)]
+    #[inline(always)]
     fn set_last_elem(&mut self, i: usize) {
         let nd = self.ndim();
         self.slice_mut()[nd - 1] = i;
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn last_wrapping_add(&mut self, i: usize) {
+        *self.last_elem_mut() = self.last_elem_mut().wrapping_add(i);
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn last_wrapping_sub(&mut self, i: usize) {
+        *self.last_elem_mut() = self.last_elem_mut().wrapping_sub(i);
     }
 
     #[doc(hidden)]
@@ -462,11 +526,11 @@ impl Dimension for Dim<[Ix; 0]> {
     fn ndim(&self) -> usize {
         0
     }
-    #[inline]
+    #[inline(always)]
     fn slice(&self) -> &[Ix] {
         &[]
     }
-    #[inline]
+    #[inline(always)]
     fn slice_mut(&mut self) -> &mut [Ix] {
         &mut []
     }
@@ -503,11 +567,11 @@ impl Dimension for Dim<[Ix; 1]> {
     fn ndim(&self) -> usize {
         1
     }
-    #[inline]
+    #[inline(always)]
     fn slice(&self) -> &[Ix] {
         self.ix()
     }
-    #[inline]
+    #[inline(always)]
     fn slice_mut(&mut self) -> &mut [Ix] {
         self.ixm()
     }
@@ -524,7 +588,7 @@ impl Dimension for Dim<[Ix; 1]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let idx = index.ixm();
         idx[0] = idx[0].wrapping_add(jump_by);
@@ -532,7 +596,7 @@ impl Dimension for Dim<[Ix; 1]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_unchecked(&self, index: &mut Self) {
         let idx = index.ixm();
         idx[0] = idx[0].wrapping_add(1);
@@ -540,7 +604,7 @@ impl Dimension for Dim<[Ix; 1]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let idx = index.ixm();
         idx[0] = idx[0].wrapping_sub(jump_by);
@@ -548,10 +612,15 @@ impl Dimension for Dim<[Ix; 1]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return first index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_unchecked(&self, index: &mut Self) {
         let idx = index.ixm();
         idx[0] = idx[0].wrapping_sub(1);
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
+        return strides[0] == 1 || self[0] <= 1;
     }
     #[inline]
     fn next_for(&self, mut index: Self) -> Option<Self> {
@@ -654,11 +723,11 @@ impl Dimension for Dim<[Ix; 2]> {
     fn into_pattern(self) -> Self::Pattern {
         self.ix().convert()
     }
-    #[inline]
+    #[inline(always)]
     fn slice(&self) -> &[Ix] {
         self.ix()
     }
-    #[inline]
+    #[inline(always)]
     fn slice_mut(&mut self) -> &mut [Ix] {
         self.ixm()
     }
@@ -670,34 +739,36 @@ impl Dimension for Dim<[Ix; 2]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let index = index.ixm();
         let max = self.ix();
         index[1] = index[1].wrapping_add(jump_by);
-        if index[1] >= max[1] {
-            let carry = index[1] / max[1];
-            index[1] = index[1] - max[1] * carry;
-            index[0] = index[0].wrapping_add(carry);
+        if index[1] < max[1] {
+            return;
         }
+        let carry = index[1] / max[1];
+        index[1] = index[1] - max[1] * carry;
+        index[0] = index[0].wrapping_add(carry);
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_unchecked(&self, index: &mut Self) {
         let index = index.ixm();
         let max = self.ix();
-        index[1] = index[1].wrapping_add( 1);
-        if max[1] == index[1] {
-            index[1] = 0;
-            index[0] = index[0].wrapping_add(1);
+        index[1] = index[1].wrapping_add(1);
+        if max[1] != index[1] {
+            return;
         }
+        index[1] = 0;
+        index[0] = index[0].wrapping_add(1);
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let index = index.ixm();
         let max = self.ix();
@@ -714,16 +785,38 @@ impl Dimension for Dim<[Ix; 2]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return first index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_unchecked(&self, index: &mut Self) {
         let index = index.ixm();
         let max = self.ix();
-        if 0 == index[1] {
+        if 0 != index[1] {
+            index[1] -= 1;
+        } else {
             index[1] = max[1] - 1;
             index[0] = index[0].wrapping_sub(1);
-        } else {
-            index[1] -= 1;
         }
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn jump_h_index_unchecked(&self, index: &mut Self) {
+        let idx = index.ixm();
+        idx[0] = idx[0].wrapping_add(1);
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn jump_h_index_back_unchecked(&self, index: &mut Self) {
+        let idx = index.ixm();
+        idx[0] = idx[0].wrapping_sub(1);
+    }
+    #[inline(always)]
+    fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
+        let dim = self.ix();
+        let strides = strides.ix();
+        // check all dimensions -- a dimension of length 1 can have unequal stride
+        if (dim[1] != 1 && strides[1] != 1) || (dim[0] != 1 && strides[0] != dim[1]) {
+            return false;
+        }
+        true
     }
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
@@ -759,12 +852,12 @@ impl Dimension for Dim<[Ix; 2]> {
         (m as usize).checked_mul(n as usize)
     }
 
-    #[inline]
+    #[inline(always)]
     fn last_elem(&self) -> usize {
         get!(self, 1)
     }
 
-    #[inline]
+    #[inline(always)]
     fn set_last_elem(&mut self, i: usize) {
         getm!(self, 1) = i;
     }
@@ -831,6 +924,12 @@ impl Dimension for Dim<[Ix; 2]> {
         stride_offset(i, s) + stride_offset(j, t)
     }
 
+    /// Self is an index, return the stride offset
+    #[inline(always)]
+    fn stride_h_offset(index: &Self, strides: &Self) -> isize {
+        stride_offset(get!(index, 0), get!(strides, 0))
+    }
+
     /// Return stride offset for this dimension and index.
     #[inline]
     fn stride_offset_checked(&self, strides: &Self, index: &Self) -> Option<isize> {
@@ -867,11 +966,11 @@ impl Dimension for Dim<[Ix; 3]> {
     fn into_pattern(self) -> Self::Pattern {
         self.ix().convert()
     }
-    #[inline]
+    #[inline(always)]
     fn slice(&self) -> &[Ix] {
         self.ix()
     }
-    #[inline]
+    #[inline(always)]
     fn slice_mut(&mut self) -> &mut [Ix] {
         self.ixm()
     }
@@ -892,7 +991,7 @@ impl Dimension for Dim<[Ix; 3]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let index = index.ixm();
         let max = self.ix();
@@ -911,7 +1010,7 @@ impl Dimension for Dim<[Ix; 3]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_unchecked(&self, index: &mut Self) {
         let index = index.ixm();
         let max = self.ix();
@@ -928,7 +1027,7 @@ impl Dimension for Dim<[Ix; 3]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return `jump_by`'th index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least `jump_by` elements
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_by_unchecked(&self, index: &mut Self, jump_by: usize) {
         let index = index.ixm();
         let max = self.ix();
@@ -953,7 +1052,7 @@ impl Dimension for Dim<[Ix; 3]> {
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return first index before index; function does not guarantee returning valid index,
     /// it should be checked before function if iterator to which index belongs, has at least one element
-    #[inline]
+    #[inline(always)]
     fn jump_index_back_unchecked(&self, index: &mut Self) {
         let index = index.ixm();
         let max = self.ix();
@@ -968,6 +1067,43 @@ impl Dimension for Dim<[Ix; 3]> {
         } else {
             index[2] -= 1;
         }
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn jump_h_index_unchecked(&self, index: &mut Self) {
+        let index = index.ixm();
+        let max = self.ix();
+        index[1] = index[1].wrapping_add(1);
+        if max[1] != index[1] {
+            return;
+        }
+        index[1] = 0;
+        index[0] = index[0].wrapping_add(1);
+    }
+    #[doc(hidden)]
+    #[inline(always)]
+    fn jump_h_index_back_unchecked(&self, index: &mut Self) {
+        let index = index.ixm();
+        let max = self.ix();
+        if 0 != index[1] {
+            index[1] -= 1;
+        } else {
+            index[1] = max[1] - 1;
+            index[0] = index[0].wrapping_sub(1);
+        }
+    }
+    #[inline(always)]
+    fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
+        let dim = self.ix();
+        let strides = strides.ix();
+        // check all dimensions -- a dimension of length 1 can have unequal stride
+        if (dim[2] != 1 && strides[2] != 1)
+            || (dim[1] != 1 && strides[1] != dim[2])
+            || (dim[0] != 1 && strides[0] != dim[2] * dim[1])
+        {
+            return false;
+        }
+        true
     }
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
@@ -1002,6 +1138,13 @@ impl Dimension for Dim<[Ix; 3]> {
         let t = get!(strides, 1);
         let u = get!(strides, 2);
         stride_offset(i, s) + stride_offset(j, t) + stride_offset(k, u)
+    }
+
+    /// Self is an index, return the stride offset
+    #[inline(always)]
+    fn stride_h_offset(index: &Self, strides: &Self) -> isize {
+        stride_offset(get!(index, 0), get!(strides, 0))
+            + stride_offset(get!(index, 1), get!(strides, 1))
     }
 
     /// Return stride offset for this dimension and index.
@@ -1112,11 +1255,11 @@ impl Dimension for IxDyn {
     fn ndim(&self) -> usize {
         self.ix().len()
     }
-    #[inline]
+    #[inline(always)]
     fn slice(&self) -> &[Ix] {
         self.ix()
     }
-    #[inline]
+    #[inline(always)]
     fn slice_mut(&mut self) -> &mut [Ix] {
         self.ixm()
     }

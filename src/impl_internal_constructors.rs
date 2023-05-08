@@ -23,6 +23,7 @@ where
     /// The caller must ensure that the data storage and pointer is valid.
     /// 
     /// See ArrayView::from_shape_ptr for general pointer validity documentation.
+    #[inline]
     pub(crate) unsafe fn from_data_ptr(data: S, ptr: NonNull<A>) -> Self {
         let array = ArrayBase {
             data,
@@ -51,6 +52,7 @@ where
     ///
     /// The caller needs to ensure that the new strides and dimensions are correct
     /// for the array data.
+    #[inline]
     pub(crate) unsafe fn with_strides_dim<E>(self, strides: E, dim: E) -> ArrayBase<S, E>
     where
         E: Dimension

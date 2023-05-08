@@ -6,13 +6,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use core::hint::unreachable_unchecked;
 use std::mem;
 use std::ptr::NonNull;
 
 use crate::imp_prelude::*;
 use crate::OwnedRepr;
 
-use super::Baseiter;
+use super::BaseIter;
 use crate::impl_owned_array::drop_unreachable_raw;
 
 
@@ -22,7 +23,7 @@ where
     D: Dimension,
 {
     array_data: OwnedRepr<A>,
-    inner: Baseiter<A, D>,
+    inner: BaseIter<A, D,false,*mut A>,
     data_len: usize,
     /// first memory address of an array element
     array_head_ptr: NonNull<A>,
@@ -44,7 +45,7 @@ where
             let data_len = array_data.release_all_elements();
             debug_assert!(data_len >= array.dim.size());
             let has_unreachable_elements = array.dim.size() != data_len;
-            let inner = Baseiter::new(ptr, array.dim, array.strides);
+            let inner = BaseIter::new(ptr, array.dim, array.strides,());
 
             IntoIter {
                 array_data,
@@ -88,10 +89,38 @@ where
 
         unsafe {
             let data_ptr = self.array_data.as_ptr_mut();
-            let view = RawArrayViewMut::new(self.array_head_ptr, self.inner.dim.clone(),
-                                            self.inner.strides.clone());
-            debug_assert!(self.inner.dim.size() < self.data_len, "data_len {} and dim size {}",
-                          self.data_len, self.inner.dim.size());
+            let view =match D::NDIM {
+                Some(0) => {
+                    if let BaseIter::D0(ref _inner) = self.inner {
+                       debug_assert!(1 < self.data_len, "data_len {} and dim size {}",
+                                     self.data_len, 1);
+                        RawArrayViewMut::new(self.array_head_ptr, D::default(),
+                        D::default())
+                    } else {
+                        unreachable_unchecked() 
+                    }
+                }
+                Some(1) => {
+                    if let BaseIter::D1(ref inner) = self.inner {
+                       debug_assert!(inner.dim.size() < self.data_len, "data_len {} and dim size {}",
+                                     self.data_len, inner.dim.size());
+                        RawArrayViewMut::new(self.array_head_ptr, inner.dim.clone(),
+                                                       inner.strides.clone())
+                    } else {
+                        unreachable_unchecked() 
+                    }
+                }
+                _ => {
+                    if let BaseIter::Dn(ref inner) =self.inner {
+                       debug_assert!(inner.dim.size() < self.data_len, "data_len {} and dim size {}",
+                                     self.data_len, inner.dim.size());
+                        RawArrayViewMut::new(self.array_head_ptr, inner.dim.clone(),
+                                                       inner.strides.clone())
+                    } else {
+                        unreachable_unchecked()
+                    }
+                }
+            };
             drop_unreachable_raw(view, data_ptr, self.data_len);
         }
     }

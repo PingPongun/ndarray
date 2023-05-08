@@ -405,7 +405,7 @@ where
         S: Data,
     {
         debug_assert!(self.pointer_is_inbounds());
-        self.view().into_iter_()
+        self.view().into_iter()
     }
 
     /// Return an iterator of mutable references to the elements of the array.
@@ -418,7 +418,7 @@ where
     where
         S: DataMut,
     {
-        self.view_mut().into_iter_()
+        self.view_mut().into_iter()
     }
 
     /// Return an iterator of indexes and references to the elements of the array.
@@ -433,7 +433,7 @@ where
     where
         S: Data,
     {
-        IndexedIter::new(self.view().into_elements_base())
+        self.view().into_iter()
     }
 
     /// Return an iterator of indexes and mutable references to the elements of the array.
@@ -446,7 +446,7 @@ where
     where
         S: DataMut,
     {
-        IndexedIterMut::new(self.view_mut().into_elements_base())
+        self.view_mut().into_iter()
     }
 
     /// Return a sliced view of the array.
@@ -1858,7 +1858,7 @@ where
                 Order::ColumnMajor => (shape.set_f(true), self.t()),
             };
             Ok(CowArray::from(Array::from_shape_trusted_iter_unchecked(
-                        shape, view.into_iter(), A::clone)))
+                        shape, view.into_iter::<false,&A>(), A::clone)))
         }
     }
 
@@ -2473,7 +2473,7 @@ where
         } else {
             let mut v = self.view();
             move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-            v.into_elements_base().fold(init, f)
+            v.into_iter::<false,&A>().fold(init, f)
         }
     }
 
@@ -2631,7 +2631,7 @@ where
             Err(arr) => {
                 let mut v = arr.view_mut();
                 move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-                v.into_elements_base().for_each(f);
+                v.into_iter::<false,&mut A>().for_each(f);
             }
         }
     }
@@ -2730,7 +2730,7 @@ where
         S: Data,
     {
         let view_len = self.len_of(axis);
-        let view_stride = self.strides.axis(axis);
+        let view_stride: usize = self.strides.axis(axis);
         if view_len == 0 {
             let new_dim = self.dim.remove_axis(axis);
             Array::from_shape_simple_fn(new_dim, move || mapping(ArrayView::from(&[])))
