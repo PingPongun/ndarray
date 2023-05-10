@@ -85,50 +85,52 @@ where
         }
 
         // iterate til the end
-        while let Some(_) = self.next() { }
+        while let Some(_) = self.next() {}
 
-        unsafe {
-            let data_ptr = self.array_data.as_ptr_mut();
-            let view =match D::NDIM {
-                Some(0) => {
-                    if let BaseIter::D0(ref _inner) = self.inner {
-                       debug_assert!(1 < self.data_len, "data_len {} and dim size {}",
-                                     self.data_len, 1);
-                        RawArrayViewMut::new(self.array_head_ptr, D::default(),
-                        D::default())
-                    } else {
-                        unreachable_unchecked() 
-                    }
-                }
-                Some(1) => {
-                    if let BaseIter::D1(ref inner) = self.inner {
-                       debug_assert!(inner.dim.size() < self.data_len, "data_len {} and dim size {}",
-                                     self.data_len, inner.dim.size());
-                        RawArrayViewMut::new(self.array_head_ptr, inner.dim.clone(),
-                                                       inner.strides.clone())
-                    } else {
-                        unreachable_unchecked() 
-                    }
-                }
-                _ => {
-                    if let BaseIter::Dn(ref inner) =self.inner {
-                       debug_assert!(inner.dim.size() < self.data_len, "data_len {} and dim size {}",
-                                     self.data_len, inner.dim.size());
-                        RawArrayViewMut::new(self.array_head_ptr, inner.dim.clone(),
-                                                       inner.strides.clone())
-                    } else {
-                        unreachable_unchecked()
-                    }
-                }
-            };
-            drop_unreachable_raw(view, data_ptr, self.data_len);
-        }
+        let data_ptr = self.array_data.as_ptr_mut();
+        let view = match D::NDIM {
+            Some(0) => unwrapBI!(&self.inner,D0,_inner=>
+            {
+                debug_assert!(1 < self.data_len, "data_len {} and dim size {}",
+                self.data_len, 1);
+                unsafe{RawArrayViewMut::new(self.array_head_ptr, D::default(), D::default())}
+            }),
+            Some(1) => unwrapBI!(&self.inner,D1,inner=>
+            {
+                debug_assert!(
+                    inner.dim.size() < self.data_len,
+                    "data_len {} and dim size {}",
+                    self.data_len,
+                    inner.dim.size()
+                );
+                unsafe{ RawArrayViewMut::new(
+                    self.array_head_ptr,
+                    inner.dim.clone(),
+                    inner.strides.clone(),
+                )}
+            }),
+            _ => unwrapBI!(&self.inner,Dn,inner=>
+            {
+                debug_assert!(
+                    inner.dim.size() < self.data_len,
+                    "data_len {} and dim size {}",
+                    self.data_len,
+                    inner.dim.size()
+                );
+                unsafe {RawArrayViewMut::new(
+                    self.array_head_ptr,
+                    inner.dim.clone(),
+                    inner.strides.clone(),
+                )}
+            }),
+        };
+        unsafe { drop_unreachable_raw(view, data_ptr, self.data_len) };
     }
 }
 
 impl<A, D> IntoIterator for Array<A, D>
 where
-    D: Dimension
+    D: Dimension,
 {
     type Item = A;
     type IntoIter = IntoIter<A, D>;

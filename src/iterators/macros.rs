@@ -37,6 +37,23 @@ macro_rules! send_sync_read_write {
     };
 }
 
+macro_rules! send_sync_bi_array_view {
+    ($name:ident,$A_trait:ident,$idx:expr) => {
+        unsafe impl<'a, A, D: Dimension, DI: Dimension> Send for BaseIter<A, D, $idx, $name<'a, A, DI>>
+        where
+            A: $A_trait,
+            D: Send,
+        {
+        }
+        unsafe impl<'a, A, D: Dimension, DI: Dimension> Sync for BaseIter<A, D, $idx, $name<'a, A, DI>>
+        where
+            A: Sync,
+            D: Sync,
+        {
+        }
+    };
+}
+
 macro_rules! impl_ndproducer {
     (
     [$($typarm:tt)*]
@@ -181,4 +198,14 @@ macro_rules! impl_iterator {
             }
         }
     }
+}
+macro_rules! unwrapBI {
+    ($bi:expr, $variant:ident, $inner:pat => $result:expr) => {
+        if let BaseIter::$variant($inner) = $bi {
+            $result
+        } else {
+            unsafe { unreachable_unchecked() }
+        }
+    };
+    ($bi:expr, $variant:ident) => {unwrapBI!($bi,$variant,inner=>inner)}
 }

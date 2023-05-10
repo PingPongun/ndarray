@@ -75,30 +75,18 @@ pub enum BaseIter<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
     Dn(BaseIterNd<A, D, IDX, IdxA>),
 }
 #[macro_use]
-mod _macros {
+pub(crate) mod _macros {
     macro_rules! eitherBI {
         ($bi:expr, $inner:pat => $result:expr) => {
             match D::NDIM {
                 Some(0) => {
-                    if let BaseIter::D0($inner) = $bi {
-                        $result
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,D0,$inner=>$result)
                 }
                 Some(1) => {
-                    if let BaseIter::D1($inner) = $bi {
-                        $result
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,D1,$inner=>$result)
                 }
                 _ => {
-                    if let BaseIter::Dn($inner) = $bi {
-                        $result
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,Dn,$inner=>$result)
                 }
             }
         };
@@ -108,25 +96,13 @@ mod _macros {
         ($bi:expr, $inner:pat => $result:expr) => {
             match D::NDIM {
                 Some(0) => {
-                    if let BaseIter::D0($inner) = $bi {
-                        BaseIter::D0($result)
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,D0,$inner=>BaseIter::D0($result))
                 }
                 Some(1) => {
-                    if let BaseIter::D1($inner) = $bi {
-                        BaseIter::D1($result)
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,D1,$inner=>BaseIter::D1($result))
                 }
                 _ => {
-                    if let BaseIter::Dn($inner) = $bi {
-                        BaseIter::Dn($result)
-                    } else {
-                        unsafe { unreachable_unchecked() }
-                    }
+                    unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))
                 }
             }
         };
@@ -958,7 +934,7 @@ mod base_iter {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline]
-        pub(crate) fn split_at(self, index: usize) -> (Self, Self) {
+        pub fn split_at(self, index: usize) -> (Self, Self) {
             eitherBI!(self,inner=>inner.split_at(index))
         }
     }
@@ -1032,6 +1008,56 @@ mod base_iter {
     //     }
     // }
 }
+impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, Ix1, IDX, IdxA> {
+    type Item = <Self as Iterator>::Item;
+    type Dim = Ix1;
+    type Ptr = *mut A;
+    type Stride = isize;
+
+    fn layout(&self) -> crate::Layout {
+        crate::Layout::one_dimensional()
+    }
+
+    fn raw_dim(&self) -> Self::Dim {
+        Ix1(self.len())
+    }
+
+    fn as_ptr(&self) -> Self::Ptr {
+        if self.len() > 0 {
+            // `self.iter.index` is guaranteed to be in-bounds if any of the
+            // iterator remains (i.e. if `self.len() > 0`).
+            unwrapBI!(self,D1,inner=>unsafe { inner.ptr.offset(Ix1::stride_offset(&inner.index, &inner.strides)) })
+        } else {
+            // In this case, `self.iter.index` may be past the end, so we must
+            // not call `.offset()`. It's okay to return a dangling pointer
+            // because it will never be used in the length 0 case.
+            std::ptr::NonNull::dangling().as_ptr()
+        }
+    }
+
+    fn contiguous_stride(&self) -> Self::Stride {
+        unwrapBI!(self, D1).strides.last_elem() as isize
+    }
+
+    unsafe fn as_ref(&self, ptr: Self::Ptr) -> Self::Item {
+        IdxA!(unwrapBI!(self, D1).inner, unwrapBI!(self, D1).index, ptr)
+    }
+
+    unsafe fn uget_ptr(&self, i: &Self::Dim) -> Self::Ptr {
+        unwrapBI!(self,D1,inner=>unsafe { inner.ptr.offset(Ix1::stride_offset(&Ix1(inner.index[0]+i[0]), &inner.strides)) })
+    }
+
+    fn stride_of(&self, _axis: Axis) -> isize {
+        self.contiguous_stride()
+    }
+
+    fn split_at(self, _axis: Axis, index: usize) -> (Self, Self) {
+        self.split_at(index)
+    }
+
+    private_impl! {}
+}
+
 //=================================================================================================
 pub use base_iter::*;
 
@@ -1735,19 +1761,19 @@ impl<'a, A, D: Dimension> AxisChunksIterMut<'a, A, D> {
 chunk_iter_impl!(AxisChunksIter, ArrayView);
 chunk_iter_impl!(AxisChunksIterMut, ArrayViewMut);
 
-// send_sync_read_only!(Iter);
 send_sync_read_only!(IndexedIter);
-send_sync_read_only!(LanesIter);
 send_sync_read_only!(AxisIter);
 send_sync_read_only!(AxisChunksIter);
 send_sync_read_only!(Iter);
+send_sync_bi_array_view!(ArrayView, Sync, false);
+send_sync_bi_array_view!(ArrayView, Sync, true);
 
-// send_sync_read_write!(IterMut);
 send_sync_read_write!(IndexedIterMut);
-send_sync_read_write!(LanesIterMut);
 send_sync_read_write!(AxisIterMut);
 send_sync_read_write!(AxisChunksIterMut);
 send_sync_read_write!(IterMut);
+send_sync_bi_array_view!(ArrayViewMut, Send, false);
+send_sync_bi_array_view!(ArrayViewMut, Send, true);
 
 /// (Trait used internally) An iterator that we trust
 /// to deliver exactly as many items as it said it would.

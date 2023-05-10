@@ -11,13 +11,12 @@ use rayon::prelude::IntoParallelIterator;
 
 use crate::iter::AxisChunksIter;
 use crate::iter::AxisChunksIterMut;
+use crate::BaseIter;
 use crate::iter::AxisIter;
 use crate::iter::AxisIterMut;
-use crate::iter::LanesIter;
-use crate::iter::LanesIterMut;
+use crate::split_at::SplitPreference;
 use crate::Dimension;
 use crate::{ArrayView, ArrayViewMut};
-use crate::split_at::SplitPreference;
 
 /// Parallel iterator wrapper.
 #[derive(Copy, Clone, Debug)]
@@ -124,8 +123,107 @@ par_iter_wrapper!(AxisIterMut, [Send + Sync]);
 par_iter_wrapper!(AxisChunksIter, [Sync]);
 par_iter_wrapper!(AxisChunksIterMut, [Send + Sync]);
 
-par_iter_wrapper!(LanesIter, [Sync]);
-par_iter_wrapper!(LanesIterMut, [Send + Sync]);
+macro_rules! BI_par_iter_wrapper {
+    // thread_bounds are either Sync or Send + Sync
+    ([$($generics:tt)*], $item:ty,$idx:expr, [$($thread_bounds:tt)*], [$($add_bounds:tt)*]) => {
+    /// Requires crate feature `rayon`.
+    impl<'a, A, D,$($generics)*> IntoParallelIterator for BaseIter<A, D, $idx, $item>
+    where D: Dimension,
+        A: $($thread_bounds)*,
+        $($add_bounds)*
+    {
+        type Item = <Self as Iterator>::Item;
+        type Iter = Parallel<Self>;
+        fn into_par_iter(self) -> Self::Iter {
+            Parallel {
+                iter: self,
+                min_len: 1,
+            }
+        }
+    }
+    impl<'a, A, D,$($generics)*> ParallelIterator for Parallel<BaseIter<A, D, $idx, $item>>
+    where D: Dimension,
+        A: $($thread_bounds)*,
+        $($add_bounds)*
+    {
+        type Item = <BaseIter<A, D, $idx, $item> as Iterator>::Item;
+        fn drive_unindexed<C>(self, consumer: C) -> C::Result
+            where C: UnindexedConsumer<Self::Item>
+        {
+            bridge(self, consumer)
+        }
+
+        fn opt_len(&self) -> Option<usize> {
+            Some(self.iter.len())
+        }
+    }
+
+
+    impl<'a, A, D,$($generics)*> IndexedParallelIterator for Parallel<BaseIter<A, D, $idx, $item>>
+    where D: Dimension,
+        A: $($thread_bounds)*,
+        $($add_bounds)*
+    {
+        fn with_producer<Cb>(self, callback: Cb) -> Cb::Output
+            where Cb: ProducerCallback<Self::Item>
+        {
+            callback.callback(ParallelProducer(self.iter, self.min_len))
+        }
+
+        fn len(&self) -> usize {
+            ExactSizeIterator::len(&self.iter)
+        }
+
+        fn drive<C>(self, consumer: C) -> C::Result
+            where C: Consumer<Self::Item>
+        {
+            bridge(self, consumer)
+        }
+    }
+
+        impl<'a, A, D,$($generics)*> IntoIterator for ParallelProducer<BaseIter<A, D, $idx, $item>>
+        where D: Dimension,
+            A: $($thread_bounds)*,
+            $($add_bounds)*
+    {
+        type IntoIter = BaseIter<A, D, $idx, $item>;
+        type Item = <Self::IntoIter as Iterator>::Item;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.0
+        }
+    }
+
+    // This is the real magic, I guess
+    impl<'a, A, D,$($generics)*> Producer for ParallelProducer<BaseIter<A, D, $idx, $item>>
+    where D: Dimension,
+        A: $($thread_bounds)*,
+        $($add_bounds)*
+    {
+        type IntoIter = BaseIter<A, D, $idx, $item>;
+        type Item = <Self::IntoIter as Iterator>::Item;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.0
+        }
+
+        fn split_at(self, i: usize) -> (Self, Self) {
+            let (a, b) = self.0.split_at(i);
+            (ParallelProducer(a, self.1), ParallelProducer(b, self.1))
+        }
+    }
+
+    };
+}
+
+BI_par_iter_wrapper!([],&'a A,false, [Sync], []);
+BI_par_iter_wrapper!([],&'a mut  A,false, [Sync + Send], []);
+BI_par_iter_wrapper!([DI:Dimension],ArrayView<'a,A,DI>,false, [Sync], []);
+BI_par_iter_wrapper!([DI:Dimension],ArrayViewMut<'a,A,DI>,false, [Sync + Send], []);
+BI_par_iter_wrapper!([],&'a A,true, [Sync], [D::Pattern: Send]);
+BI_par_iter_wrapper!([],&'a mut  A,true, [Sync + Send], [D::Pattern: Send]);
+BI_par_iter_wrapper!([DI:Dimension],ArrayView<'a,A,DI>,true, [Sync], [D::Pattern: Send]);
+BI_par_iter_wrapper!([DI:Dimension],ArrayViewMut<'a,A,DI>,true, [Sync + Send], [D::Pattern: Send]);
 
 macro_rules! par_iter_view_wrapper {
     // thread_bounds are either Sync or Send + Sync
