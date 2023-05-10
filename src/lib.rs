@@ -142,7 +142,6 @@ pub use crate::slice::{
 };
 
 use crate::iterators::BaseIter;
-use crate::iterators::{Iter, IterMut, };
 
 pub use crate::arraytraits::AsArray;
 #[cfg(feature = "std")]

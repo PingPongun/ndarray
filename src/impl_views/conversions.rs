@@ -201,7 +201,15 @@ where
     where
         D: RemoveAxis,
     {
-        AxisIter::new(self, Axis(0))
+        let v = self.view();
+        unsafe {
+            AxisIter::new(
+                v.ptr.as_ptr(),
+                Ix1(v.dim.axis(Axis(0))),
+                Ix1(v.strides.axis(Axis(0))),
+                (v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
+            )
+        }
     }
 }
 
@@ -253,10 +261,18 @@ where
     /// Return an outer iterator for this view.
     #[doc(hidden)] // not official
     #[deprecated(note = "This method will be replaced.")]
-    pub fn into_outer_iter(self) -> iter::AxisIterMut<'a, A, D::Smaller>
+    pub fn into_outer_iter(mut self) -> iter::AxisIterMut<'a, A, D::Smaller>
     where
         D: RemoveAxis,
     {
-        AxisIterMut::new(self, Axis(0))
+        let v = self.view_mut();
+        unsafe {
+            AxisIterMut::new(
+                v.ptr.as_ptr(),
+                Ix1(v.dim.axis(Axis(0))),
+                Ix1(v.strides.axis(Axis(0))),
+                (v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
+            )
+        }
     }
 }

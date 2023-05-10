@@ -21,10 +21,10 @@ use std::ptr;
 
 use crate::Ix1;
 
-use super::{ArrayBase, ArrayView, ArrayViewMut, Axis, Data, NdProducer, RemoveAxis};
+use super::{ArrayView, ArrayViewMut, Axis, NdProducer};
 use super::{Dimension, Ix, Ixs};
 
-pub use self::chunks::{ExactChunks, ExactChunksIter, ExactChunksIterMut, ExactChunksMut};
+pub use self::chunks::{ExactChunks, ExactChunksMut};
 pub use self::into_iter::IntoIter;
 pub use self::lanes::{Lanes, LanesMut};
 pub use self::windows::Windows;
@@ -968,8 +968,6 @@ mod base_iter {
 
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> DoubleEndedIterator
         for BaseIter<A, D, IDX, IdxA>
-    where
-        D: Dimension,
     {
         #[inline(always)]
         fn next_back(&mut self) -> Option<Self::Item> {
@@ -1098,6 +1096,55 @@ pub type LanesIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, Ix1>>;
 /// for more information.
 pub type LanesIterMut<'a, A, D> = BaseIter<A, D, false, ArrayViewMut<'a, A, Ix1>>;
 
+/// Exact chunks iterator.
+///
+/// See [`.exact_chunks()`](ArrayBase::exact_chunks) for more
+/// information.
+pub type ExactChunksIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, D>>;
+
+/// Exact chunks iterator.
+///
+/// See [`.exact_chunks_mut()`](ArrayBase::exact_chunks_mut)
+/// for more information.
+pub type ExactChunksIterMut<'a, A, D> = BaseIter<A, D, false, ArrayViewMut<'a, A, D>>;
+
+/// Window iterator.
+///
+/// See [`.windows()`](ArrayBase::windows) for more
+/// information.
+pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, D>>;
+
+/// An iterator that traverses over an axis and
+/// and yields each subview.
+///
+/// The outermost dimension is `Axis(0)`, created with `.outer_iter()`,
+/// but you can traverse arbitrary dimension with `.axis_iter()`.
+///
+/// For example, in a 3 × 5 × 5 array, with `axis` equal to `Axis(2)`,
+/// the iterator element is a 3 × 5 subview (and there are 5 in total).
+///
+/// Iterator element type is `ArrayView<'a, A, D>`.
+///
+/// See [`.outer_iter()`](ArrayBase::outer_iter)
+/// or [`.axis_iter()`](ArrayBase::axis_iter)
+/// for more information.
+pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, ArrayView<'a, A, DI>>;
+
+/// An iterator that traverses over an axis and
+/// and yields each subview (mutable)
+///
+/// The outermost dimension is `Axis(0)`, created with `.outer_iter()`,
+/// but you can traverse arbitrary dimension with `.axis_iter()`.
+///
+/// For example, in a 3 × 5 × 5 array, with `axis` equal to `Axis(2)`,
+/// the iterator element is a 3 × 5 subview (and there are 5 in total).
+///
+/// Iterator element type is `ArrayViewMut<'a, A, D>`.
+///
+/// See [`.outer_iter_mut()`](ArrayBase::outer_iter_mut)
+/// or [`.axis_iter_mut()`](ArrayBase::axis_iter_mut)
+/// for more information.
+pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, ArrayViewMut<'a, A, DI>>;
 //=================================================================================================
 
 #[derive(Debug)]
@@ -1133,21 +1180,6 @@ clone_bounds!(
 );
 
 impl<A, D: Dimension> AxisIterCore<A, D> {
-    /// Constructs a new iterator over the specified axis.
-    fn new<S, Di>(v: ArrayBase<S, Di>, axis: Axis) -> Self
-    where
-        Di: RemoveAxis<Smaller = D>,
-        S: Data<Elem = A>,
-    {
-        AxisIterCore {
-            index: 0,
-            end: v.len_of(axis),
-            stride: v.stride_of(axis),
-            inner_dim: v.dim.remove_axis(axis),
-            inner_strides: v.strides.remove_axis(axis),
-            ptr: v.ptr.as_ptr(),
-        }
-    }
 
     #[inline]
     unsafe fn offset(&self, index: usize) -> *mut A {
@@ -1249,301 +1281,6 @@ where
     fn len(&self) -> usize {
         self.end - self.index
     }
-}
-
-/// An iterator that traverses over an axis and
-/// and yields each subview.
-///
-/// The outermost dimension is `Axis(0)`, created with `.outer_iter()`,
-/// but you can traverse arbitrary dimension with `.axis_iter()`.
-///
-/// For example, in a 3 × 5 × 5 array, with `axis` equal to `Axis(2)`,
-/// the iterator element is a 3 × 5 subview (and there are 5 in total).
-///
-/// Iterator element type is `ArrayView<'a, A, D>`.
-///
-/// See [`.outer_iter()`](ArrayBase::outer_iter)
-/// or [`.axis_iter()`](ArrayBase::axis_iter)
-/// for more information.
-#[derive(Debug)]
-pub struct AxisIter<'a, A, D> {
-    iter: AxisIterCore<A, D>,
-    life: PhantomData<&'a A>,
-}
-
-clone_bounds!(
-    ['a, A, D: Clone]
-    AxisIter['a, A, D] {
-        @copy {
-            life,
-        }
-        iter,
-    }
-);
-
-impl<'a, A, D: Dimension> AxisIter<'a, A, D> {
-    /// Creates a new iterator over the specified axis.
-    pub(crate) fn new<Di>(v: ArrayView<'a, A, Di>, axis: Axis) -> Self
-    where
-        Di: RemoveAxis<Smaller = D>,
-    {
-        AxisIter {
-            iter: AxisIterCore::new(v, axis),
-            life: PhantomData,
-        }
-    }
-
-    /// Splits the iterator at `index`, yielding two disjoint iterators.
-    ///
-    /// `index` is relative to the current state of the iterator (which is not
-    /// necessarily the start of the axis).
-    ///
-    /// **Panics** if `index` is strictly greater than the iterator's remaining
-    /// length.
-    pub fn split_at(self, index: usize) -> (Self, Self) {
-        let (left, right) = self.iter.split_at(index);
-        (
-            AxisIter {
-                iter: left,
-                life: self.life,
-            },
-            AxisIter {
-                iter: right,
-                life: self.life,
-            },
-        )
-    }
-}
-
-impl<'a, A, D> Iterator for AxisIter<'a, A, D>
-where
-    D: Dimension,
-{
-    type Item = ArrayView<'a, A, D>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|ptr| unsafe { self.as_ref(ptr) })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-}
-
-impl<'a, A, D> DoubleEndedIterator for AxisIter<'a, A, D>
-where
-    D: Dimension,
-{
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|ptr| unsafe { self.as_ref(ptr) })
-    }
-}
-
-impl<'a, A, D> ExactSizeIterator for AxisIter<'a, A, D>
-where
-    D: Dimension,
-{
-    fn len(&self) -> usize {
-        self.iter.len()
-    }
-}
-
-/// An iterator that traverses over an axis and
-/// and yields each subview (mutable)
-///
-/// The outermost dimension is `Axis(0)`, created with `.outer_iter()`,
-/// but you can traverse arbitrary dimension with `.axis_iter()`.
-///
-/// For example, in a 3 × 5 × 5 array, with `axis` equal to `Axis(2)`,
-/// the iterator element is a 3 × 5 subview (and there are 5 in total).
-///
-/// Iterator element type is `ArrayViewMut<'a, A, D>`.
-///
-/// See [`.outer_iter_mut()`](ArrayBase::outer_iter_mut)
-/// or [`.axis_iter_mut()`](ArrayBase::axis_iter_mut)
-/// for more information.
-pub struct AxisIterMut<'a, A, D> {
-    iter: AxisIterCore<A, D>,
-    life: PhantomData<&'a mut A>,
-}
-
-impl<'a, A, D: Dimension> AxisIterMut<'a, A, D> {
-    /// Creates a new iterator over the specified axis.
-    pub(crate) fn new<Di>(v: ArrayViewMut<'a, A, Di>, axis: Axis) -> Self
-    where
-        Di: RemoveAxis<Smaller = D>,
-    {
-        AxisIterMut {
-            iter: AxisIterCore::new(v, axis),
-            life: PhantomData,
-        }
-    }
-
-    /// Splits the iterator at `index`, yielding two disjoint iterators.
-    ///
-    /// `index` is relative to the current state of the iterator (which is not
-    /// necessarily the start of the axis).
-    ///
-    /// **Panics** if `index` is strictly greater than the iterator's remaining
-    /// length.
-    pub fn split_at(self, index: usize) -> (Self, Self) {
-        let (left, right) = self.iter.split_at(index);
-        (
-            AxisIterMut {
-                iter: left,
-                life: self.life,
-            },
-            AxisIterMut {
-                iter: right,
-                life: self.life,
-            },
-        )
-    }
-}
-
-impl<'a, A, D> Iterator for AxisIterMut<'a, A, D>
-where
-    D: Dimension,
-{
-    type Item = ArrayViewMut<'a, A, D>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|ptr| unsafe { self.as_ref(ptr) })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-}
-
-impl<'a, A, D> DoubleEndedIterator for AxisIterMut<'a, A, D>
-where
-    D: Dimension,
-{
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|ptr| unsafe { self.as_ref(ptr) })
-    }
-}
-
-impl<'a, A, D> ExactSizeIterator for AxisIterMut<'a, A, D>
-where
-    D: Dimension,
-{
-    fn len(&self) -> usize {
-        self.iter.len()
-    }
-}
-
-impl<'a, A, D: Dimension> NdProducer for AxisIter<'a, A, D> {
-    type Item = <Self as Iterator>::Item;
-    type Dim = Ix1;
-    type Ptr = *mut A;
-    type Stride = isize;
-
-    fn layout(&self) -> crate::Layout {
-        crate::Layout::one_dimensional()
-    }
-
-    fn raw_dim(&self) -> Self::Dim {
-        Ix1(self.len())
-    }
-
-    fn as_ptr(&self) -> Self::Ptr {
-        if self.len() > 0 {
-            // `self.iter.index` is guaranteed to be in-bounds if any of the
-            // iterator remains (i.e. if `self.len() > 0`).
-            unsafe { self.iter.offset(self.iter.index) }
-        } else {
-            // In this case, `self.iter.index` may be past the end, so we must
-            // not call `.offset()`. It's okay to return a dangling pointer
-            // because it will never be used in the length 0 case.
-            std::ptr::NonNull::dangling().as_ptr()
-        }
-    }
-
-    fn contiguous_stride(&self) -> isize {
-        self.iter.stride
-    }
-
-    unsafe fn as_ref(&self, ptr: Self::Ptr) -> Self::Item {
-        ArrayView::new_(
-            ptr,
-            self.iter.inner_dim.clone(),
-            self.iter.inner_strides.clone(),
-        )
-    }
-
-    unsafe fn uget_ptr(&self, i: &Self::Dim) -> Self::Ptr {
-        self.iter.offset(self.iter.index + i[0])
-    }
-
-    fn stride_of(&self, _axis: Axis) -> isize {
-        self.contiguous_stride()
-    }
-
-    fn split_at(self, _axis: Axis, index: usize) -> (Self, Self) {
-        self.split_at(index)
-    }
-
-    private_impl! {}
-}
-
-impl<'a, A, D: Dimension> NdProducer for AxisIterMut<'a, A, D> {
-    type Item = <Self as Iterator>::Item;
-    type Dim = Ix1;
-    type Ptr = *mut A;
-    type Stride = isize;
-
-    fn layout(&self) -> crate::Layout {
-        crate::Layout::one_dimensional()
-    }
-
-    fn raw_dim(&self) -> Self::Dim {
-        Ix1(self.len())
-    }
-
-    fn as_ptr(&self) -> Self::Ptr {
-        if self.len() > 0 {
-            // `self.iter.index` is guaranteed to be in-bounds if any of the
-            // iterator remains (i.e. if `self.len() > 0`).
-            unsafe { self.iter.offset(self.iter.index) }
-        } else {
-            // In this case, `self.iter.index` may be past the end, so we must
-            // not call `.offset()`. It's okay to return a dangling pointer
-            // because it will never be used in the length 0 case.
-            std::ptr::NonNull::dangling().as_ptr()
-        }
-    }
-
-    fn contiguous_stride(&self) -> isize {
-        self.iter.stride
-    }
-
-    unsafe fn as_ref(&self, ptr: Self::Ptr) -> Self::Item {
-        ArrayViewMut::new_(
-            ptr,
-            self.iter.inner_dim.clone(),
-            self.iter.inner_strides.clone(),
-        )
-    }
-
-    unsafe fn uget_ptr(&self, i: &Self::Dim) -> Self::Ptr {
-        self.iter.offset(self.iter.index + i[0])
-    }
-
-    fn stride_of(&self, _axis: Axis) -> isize {
-        self.contiguous_stride()
-    }
-
-    fn split_at(self, _axis: Axis, index: usize) -> (Self, Self) {
-        self.split_at(index)
-    }
-
-    private_impl! {}
 }
 
 /// An iterator that traverses over the specified axis
@@ -1762,14 +1499,12 @@ chunk_iter_impl!(AxisChunksIter, ArrayView);
 chunk_iter_impl!(AxisChunksIterMut, ArrayViewMut);
 
 send_sync_read_only!(IndexedIter);
-send_sync_read_only!(AxisIter);
 send_sync_read_only!(AxisChunksIter);
 send_sync_read_only!(Iter);
 send_sync_bi_array_view!(ArrayView, Sync, false);
 send_sync_bi_array_view!(ArrayView, Sync, true);
 
 send_sync_read_write!(IndexedIterMut);
-send_sync_read_write!(AxisIterMut);
 send_sync_read_write!(AxisChunksIterMut);
 send_sync_read_write!(IterMut);
 send_sync_bi_array_view!(ArrayViewMut, Send, false);

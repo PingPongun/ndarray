@@ -1,4 +1,4 @@
-use super::Iter;
+use super::WindowsIter;
 use crate::imp_prelude::*;
 use crate::IntoDimension;
 use crate::Layout;
@@ -76,50 +76,13 @@ where
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = WindowsIter<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
-        WindowsIter {
-            iter: self.base.into_iter(),
-            window: self.window,
-            strides: self.strides,
+        unsafe {
+            WindowsIter::new(
+                self.base.ptr.as_ptr(),
+                self.base.dim,
+                self.base.strides,
+                (self.window, self.strides),
+            )
         }
-    }
-}
-
-/// Window iterator.
-///
-/// See [`.windows()`](ArrayBase::windows) for more
-/// information.
-pub struct WindowsIter<'a, A, D: Dimension> {
-    iter: Iter<'a, A, D>,
-    window: D,
-    strides: D,
-}
-
-impl_iterator! {
-    ['a, A, D: Dimension]
-    [Clone => 'a, A, D: Clone + Dimension]
-    WindowsIter {
-        iter,
-        window,
-        strides,
-    }
-    WindowsIter<'a, A, D> {
-        type Item = ArrayView<'a, A, D>;
-
-        fn item(&mut self, elt) {
-            unsafe {
-                ArrayView::new_(
-                    elt,
-                    self.window.clone(),
-                    self.strides.clone())
-            }
-        }
-        fold_pre{
-            let window=self.window.clone()
-            let strides=self.strides.clone()}
-        fold_cast[(|elt|{
-            unsafe {
-              ArrayView::new_(elt,window.clone(),strides.clone())
-            }
-          })]
     }
 }

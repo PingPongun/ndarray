@@ -1,7 +1,7 @@
 use crate::imp_prelude::*;
-use crate::Iter;
-use crate::IterMut;
+use crate::iter::ExactChunksIter;
 use crate::IntoDimension;
+use crate::iter::ExactChunksIterMut;
 use crate::{Layout, NdProducer};
 
 impl_ndproducer! {
@@ -78,22 +78,15 @@ where
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = ExactChunksIter<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
-        ExactChunksIter {
-            iter: self.base.into_iter(),
-            chunk: self.chunk,
-            inner_strides: self.inner_strides,
+        unsafe {
+            ExactChunksIter::new(
+                self.base.ptr.as_ptr(),
+                self.base.dim,
+                self.base.strides,
+                (self.chunk, self.inner_strides),
+            )
         }
     }
-}
-
-/// Exact chunks iterator.
-///
-/// See [`.exact_chunks()`](ArrayBase::exact_chunks) for more
-/// information.
-pub struct ExactChunksIter<'a, A, D: Dimension> {
-    iter: Iter<'a, A, D>,
-    chunk: D,
-    inner_strides: D,
 }
 
 impl_ndproducer! {
@@ -168,80 +161,13 @@ where
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = ExactChunksIterMut<'a, A, D>;
     fn into_iter(self) -> Self::IntoIter {
-        ExactChunksIterMut {
-            iter: self.base.into_iter(),
-            chunk: self.chunk,
-            inner_strides: self.inner_strides,
+        unsafe {
+            ExactChunksIterMut::new(
+                self.base.ptr.as_ptr(),
+                self.base.dim,
+                self.base.strides,
+                (self.chunk, self.inner_strides),
+            )
         }
     }
-}
-
-impl_iterator! {
-    ['a, A, D: Dimension]
-    [Clone => 'a, A, D: Clone + Dimension]
-    ExactChunksIter {
-        iter,
-        chunk,
-        inner_strides,
-    }
-    ExactChunksIter<'a, A, D> {
-        type Item = ArrayView<'a, A, D>;
-
-        fn item(&mut self, elt) {
-            unsafe {
-                ArrayView::new_(
-                    elt,
-                    self.chunk.clone(),
-                    self.inner_strides.clone())
-            }
-        }
-        fold_pre{
-            let chunk=self.chunk.clone()
-            let strides=self.inner_strides.clone()}
-        fold_cast[(|elt|{
-            unsafe {
-              ArrayView::new_(elt,chunk.clone(),strides.clone())
-            }
-          })]
-    }
-}
-
-impl_iterator! {
-    ['a, A, D: Dimension]
-    [Clone => ]
-    ExactChunksIterMut {
-        iter,
-        chunk,
-        inner_strides,
-    }
-    ExactChunksIterMut<'a, A, D> {
-        type Item = ArrayViewMut<'a, A, D>;
-
-        fn item(&mut self, elt) {
-            unsafe {
-                ArrayViewMut::new_(
-                    elt,
-                    self.chunk.clone(),
-                    self.inner_strides.clone())
-            }
-        }
-        fold_pre{
-            let chunk=self.chunk.clone()
-            let strides=self.inner_strides.clone()}
-        fold_cast[(|elt|{
-            unsafe {
-              ArrayViewMut::new_(elt,chunk.clone(),strides.clone())
-            }
-          })]
-    }
-}
-
-/// Exact chunks iterator.
-///
-/// See [`.exact_chunks_mut()`](ArrayBase::exact_chunks_mut)
-/// for more information.
-pub struct ExactChunksIterMut<'a, A, D: Dimension> {
-    iter: IterMut<'a, A, D>,
-    chunk: D,
-    inner_strides: D,
 }

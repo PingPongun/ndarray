@@ -1290,7 +1290,15 @@ where
         S: Data,
         D: RemoveAxis,
     {
-        AxisIter::new(self.view(), axis)
+        let v = self.view();
+        unsafe {
+            AxisIter::new(
+                v.ptr.as_ptr(),
+                Ix1(v.dim.axis(axis)),
+                Ix1(v.strides.axis(axis)),
+                (v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
+            )
+        }
     }
 
     /// Return an iterator that traverses over `axis`
@@ -1305,7 +1313,15 @@ where
         S: DataMut,
         D: RemoveAxis,
     {
-        AxisIterMut::new(self.view_mut(), axis)
+        let v = self.view_mut();
+        unsafe {
+            AxisIterMut::new(
+                v.ptr.as_ptr(),
+                Ix1(v.dim.axis(axis)),
+                Ix1(v.strides.axis(axis)),
+                (v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
+            )
+        }
     }
 
     /// Return an iterator that traverses over `axis` by chunks of `size`,

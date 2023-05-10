@@ -143,62 +143,6 @@ expand_if!(@nonempty [$($cloneparm)*]
     }
 }
 
-macro_rules! impl_iterator {
-    (
-    [$($typarm:tt)*]
-    [Clone => $($cloneparm:tt)*]
-     $typename:ident {
-         $base:ident,
-         $(
-             $fieldname:ident,
-         )*
-     }
-     $fulltype:ty {
-        type Item = $ity:ty;
-
-        fn item(&mut $self_:ident, $elt:pat) {
-            $refexpr:expr
-        }
-        fold_pre{$($fold_pre:stmt)*}
-        fold_cast[$fold_cast:expr]
-    }) => {
-         expand_if!(@nonempty [$($cloneparm)*]
-
-            impl<$($cloneparm)*> Clone for $fulltype {
-                fn clone(&self) -> Self {
-                    $typename {
-                        $base: self.$base.clone(),
-                        $(
-                            $fieldname: self.$fieldname.clone(),
-                        )*
-                    }
-                }
-            }
-
-         );
-        impl<$($typarm)*> Iterator for $fulltype {
-            type Item = $ity;
-
-            fn next(&mut $self_) -> Option<Self::Item> {
-                $self_.$base.next().map(|$elt| {
-                    $refexpr
-                })
-            }
-
-            fn fold<Acc, G>( $self_, init: Acc, mut g: G) -> Acc
-            where
-                G: FnMut(Acc, Self::Item) -> Acc,
-            {
-                $($fold_pre)*
-                $self_.$base.fold(init,move |acc, ptr| g(acc, $fold_cast(ptr)))
-            }
-
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                self.$base.size_hint()
-            }
-        }
-    }
-}
 macro_rules! unwrapBI {
     ($bi:expr, $variant:ident, $inner:pat => $result:expr) => {
         if let BaseIter::$variant($inner) = $bi {

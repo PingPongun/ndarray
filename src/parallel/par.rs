@@ -12,8 +12,6 @@ use rayon::prelude::IntoParallelIterator;
 use crate::iter::AxisChunksIter;
 use crate::iter::AxisChunksIterMut;
 use crate::BaseIter;
-use crate::iter::AxisIter;
-use crate::iter::AxisIterMut;
 use crate::split_at::SplitPreference;
 use crate::Dimension;
 use crate::{ArrayView, ArrayViewMut};
@@ -118,8 +116,6 @@ macro_rules! par_iter_wrapper {
     }
 }
 
-par_iter_wrapper!(AxisIter, [Sync]);
-par_iter_wrapper!(AxisIterMut, [Send + Sync]);
 par_iter_wrapper!(AxisChunksIter, [Sync]);
 par_iter_wrapper!(AxisChunksIterMut, [Send + Sync]);
 
@@ -137,7 +133,7 @@ macro_rules! BI_par_iter_wrapper {
         fn into_par_iter(self) -> Self::Iter {
             Parallel {
                 iter: self,
-                min_len: 1,
+                min_len: DEFAULT_MIN_LEN,
             }
         }
     }
