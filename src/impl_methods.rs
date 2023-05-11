@@ -26,6 +26,8 @@ use crate::dimension::broadcast::co_broadcast;
 use crate::dimension::reshape_dim;
 use crate::error::{self, ErrorKind, ShapeError, from_kind};
 use crate::math_cell::MathCell;
+use crate::iterators::BIItemRef;
+use crate::iterators::BIItemRefMut;
 use crate::itertools::zip;
 use crate::AxisDescription;
 use crate::order::Order;
@@ -1354,7 +1356,38 @@ where
     where
         S: Data,
     {
-        AxisChunksIter::new(self.view(), axis, size)
+        assert_ne!(size, 0, "Chunk size must be nonzero.");
+        let v = self.view();
+        let axis_len = v.len_of(axis);
+        let n_whole_chunks = axis_len / size;
+        let chunk_remainder = axis_len % size;
+        let iter_len = if chunk_remainder == 0 {
+            n_whole_chunks
+        } else {
+            n_whole_chunks + 1
+        };
+        let stride = if n_whole_chunks == 0 {
+            // This case avoids potential overflow when `size > axis_len`.
+            0
+        } else {
+            v.stride_of(axis) * size as isize
+        };
+
+        let axis = axis.index();
+        let mut inner_dim = v.dim.clone();
+        inner_dim[axis] = size;
+
+        let mut partial_chunk_dim = v.dim;
+        partial_chunk_dim[axis] = chunk_remainder;
+
+        unsafe {
+            AxisChunksIter::new(
+                v.ptr.as_ptr(),
+                Ix1(iter_len),
+                Ix1(stride as usize),
+                (inner_dim, v.strides, n_whole_chunks, partial_chunk_dim),
+            )
+        }
     }
 
     /// Return an iterator that traverses over `axis` by chunks of `size`,
@@ -1367,7 +1400,38 @@ where
     where
         S: DataMut,
     {
-        AxisChunksIterMut::new(self.view_mut(), axis, size)
+        assert_ne!(size, 0, "Chunk size must be nonzero.");
+        let v = self.view_mut();
+        let axis_len = v.len_of(axis);
+        let n_whole_chunks = axis_len / size;
+        let chunk_remainder = axis_len % size;
+        let iter_len = if chunk_remainder == 0 {
+            n_whole_chunks
+        } else {
+            n_whole_chunks + 1
+        };
+        let stride = if n_whole_chunks == 0 {
+            // This case avoids potential overflow when `size > axis_len`.
+            0
+        } else {
+            v.stride_of(axis) * size as isize
+        };
+
+        let axis = axis.index();
+        let mut inner_dim = v.dim.clone();
+        inner_dim[axis] = size;
+
+        let mut partial_chunk_dim = v.dim;
+        partial_chunk_dim[axis] = chunk_remainder;
+
+        unsafe {
+            AxisChunksIterMut::new(
+                v.ptr.as_ptr(),
+                Ix1(iter_len),
+                Ix1(stride as usize),
+                (inner_dim, v.strides, n_whole_chunks, partial_chunk_dim),
+            )
+        }
     }
 
     /// Return an exact chunks producer (and iterable).
@@ -1874,7 +1938,10 @@ where
                 Order::ColumnMajor => (shape.set_f(true), self.t()),
             };
             Ok(CowArray::from(Array::from_shape_trusted_iter_unchecked(
-                        shape, view.into_iter::<false,&A>(), A::clone)))
+                shape,
+                view.into_iter::<false, BIItemRef<A>>(),
+                A::clone,
+            )))
         }
     }
 
@@ -2489,7 +2556,7 @@ where
         } else {
             let mut v = self.view();
             move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-            v.into_iter::<false,&A>().fold(init, f)
+            v.into_iter::<false, BIItemRef<A>>().fold(init, f)
         }
     }
 
@@ -2647,7 +2714,7 @@ where
             Err(arr) => {
                 let mut v = arr.view_mut();
                 move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-                v.into_iter::<false,&mut A>().for_each(f);
+                v.into_iter::<false, BIItemRefMut<A>>().for_each(f);
             }
         }
     }

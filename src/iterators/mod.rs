@@ -21,14 +21,12 @@ use std::ptr;
 
 use crate::Ix1;
 
-use super::{ArrayView, ArrayViewMut, Axis, NdProducer};
-use super::{Dimension, Ix, Ixs};
-
 pub use self::chunks::{ExactChunks, ExactChunksMut};
 pub use self::into_iter::IntoIter;
 pub use self::lanes::{Lanes, LanesMut};
 pub use self::windows::Windows;
-
+use super::{ArrayView, ArrayViewMut, Axis, NdProducer};
+use super::{Dimension, IntoDimension, Ixs};
 use std::slice::{self};
 
 pub struct BaseIter0d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
@@ -120,10 +118,12 @@ pub(crate) mod _macros {
     }
 
     macro_rules! impl_BIItem {
-        ( $typ:ident,$ret:ty,$inner:ident ,$pat:pat => $func:expr) => {
-            impl<'a, A, D: Dimension, $typ: Dimension> BIItemT<A, D, true> for $ret {
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
+            pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
+
+            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = (D::Pattern, $ret);
-                type Inner = ($typ, $typ);
+                type Inner = $inner_ty;
                 const W_INNER: bool = true;
 
                 #[inline(always)]
@@ -135,9 +135,9 @@ pub(crate) mod _macros {
                     (idx, $func)
                 }
             }
-            impl<'a, A, D: Dimension, $typ: Dimension> BIItemT<A, D, false> for $ret {
+            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, false> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = $ret;
-                type Inner = ($typ, $typ);
+                type Inner = $inner_ty;
                 const W_INNER: bool = true;
 
                 #[inline(always)]
@@ -146,8 +146,10 @@ pub(crate) mod _macros {
                 }
             }
         };
-        ( $ret:ty ,$pat:pat => $func:expr) => {
-            impl<'a, A, D: Dimension> BIItemT<A, D, true> for $ret {
+        ( $name:ident, [$($generics_ty:tt)*], $ret:ty ,$pat:pat => $func:expr) => {
+            pub struct $name< $($generics_ty)*>(PhantomData<$ret>);
+
+            impl<'a, A, D: Dimension> BIItemT<A, D, true> for $name<$($generics_ty)*> {
                 type BIItem = (D::Pattern, $ret);
                 type Inner = ();
                 const W_INNER: bool = false;
@@ -157,7 +159,7 @@ pub(crate) mod _macros {
                     (idx, $func)
                 }
             }
-            impl<'a, A, D: Dimension> BIItemT<A, D, false> for $ret {
+            impl<'a, A, D: Dimension> BIItemT<A, D, false> for $name<$($generics_ty)*> {
                 type BIItem = $ret;
                 type Inner = ();
                 const W_INNER: bool = false;
@@ -204,12 +206,37 @@ pub(crate) mod _macros {
             IdxA!($inner, $idx, $ptr, $idx_expr, {})
         };
     }
+    macro_rules! impl_BIItemVariableArrayView {
+        ($name:ident, $ret:ident) => {
+            pub struct $name<'a, A, DI>(PhantomData<$ret<'a, A, DI>>);
+    
+            impl<'a, A, D: Dimension, DI: Clone + Dimension> BIItemT<A, D, true> for $name<'a, A, DI> {
+                type BIItem = $ret<'a, A, DI>;
+                //(DI, DI, usize, DI) -> (Internal_Dim, Internal_Strides, Index_of_partial_view, Dim_of_partial_view)
+                type Inner = (DI, DI, usize, DI);
+                const W_INNER: bool = true;
+                #[inline(always)]
+                fn item_idx_w_inner(inner: &Self::Inner, idx: D::Pattern, ptr: *mut A) -> Self::BIItem {
+                    if D::NDIM == Some(1) {
+                        if idx.into_dimension()[0] == inner.2 {
+                            unsafe { $ret::new_(ptr, inner.3.clone(), inner.1.clone()) }
+                        } else {
+                            unsafe { $ret::new_(ptr, inner.0.clone(), inner.1.clone()) }
+                        }
+                    } else {
+                        todo!();
+                    }
+                }
+            }
+        };
+    }
 }
 
 pub trait BIItemT<A, D: Dimension, const IDX: bool> {
     type BIItem;
     type Inner: Clone;
     const W_INNER: bool;
+
     #[inline(always)]
     fn item(_val: *mut A) -> Self::BIItem {
         unreachable!()
@@ -227,11 +254,16 @@ pub trait BIItemT<A, D: Dimension, const IDX: bool> {
         unreachable!()
     }
 }
-impl_BIItem!(*mut A,ptr =>ptr);
-impl_BIItem!(&'a A,ptr => unsafe{&*ptr});
-impl_BIItem!(DI,ArrayViewMut<'a,A,DI>, inner,ptr => unsafe{ArrayViewMut::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItem!(DI,ArrayView<'a,A,DI>, inner,ptr => unsafe{ArrayView::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItem!(&'a mut A,ptr => unsafe{&mut *ptr});
+impl_BIItem!(BIItemPtr, [A], *mut A,ptr =>ptr);
+impl_BIItem!(BIItemRef, ['a, A], &'a A,ptr => unsafe{&*ptr});
+impl_BIItem!(BIItemRefMut, ['a, A], &'a mut A,ptr => unsafe{&mut *ptr});
+//(DI,DI)-> (Internal_Dim, Internal_Strides)
+impl_BIItem!(BIItemArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI,DI), inner,
+    ptr => unsafe{ArrayView::new_(ptr,inner.0.clone(), inner.1.clone() )});
+impl_BIItem!(BIItemArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI,DI), inner,
+    ptr => unsafe{ArrayViewMut::new_(ptr,inner.0.clone(), inner.1.clone() )});
+impl_BIItemVariableArrayView!(BIItemVariableArrayView, ArrayView);
+impl_BIItemVariableArrayView!(BIItemVariableArrayViewMut, ArrayViewMut);
 
 //=================================================================================================
 mod base_iter_0d {
@@ -1059,60 +1091,61 @@ impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, 
 //=================================================================================================
 pub use base_iter::*;
 
+pub type PtrIter<A, D> = BaseIter<A, D, false, BIItemPtr<A>>;
 /// An iterator over the elements of an array.
 ///
 /// Iterator element type is `&'a A`.
 ///
 /// See [`.iter()`](ArrayBase::iter) for more information.
-pub type Iter<'a, A, D> = BaseIter<A, D, false, &'a A>;
+pub type Iter<'a, A, D> = BaseIter<A, D, false, BIItemRef<'a, A>>;
 
 /// An iterator over the elements of an array (mutable).
 ///
 /// Iterator element type is `&'a mut A`.
 ///
 /// See [`.iter_mut()`](ArrayBase::iter_mut) for more information.
-pub type IterMut<'a, A, D> = BaseIter<A, D, false, &'a mut A>;
+pub type IterMut<'a, A, D> = BaseIter<A, D, false, BIItemRefMut<'a, A>>;
 
 /// An iterator over the indexes and elements of an array.
 ///
 /// See [`.indexed_iter()`](ArrayBase::indexed_iter) for more information.
-pub type IndexedIter<'a, A, D> = BaseIter<A, D, true, &'a A>;
+pub type IndexedIter<'a, A, D> = BaseIter<A, D, true, BIItemRef<'a, A>>;
 
 /// An iterator over the indexes and elements of an array (mutable).
 ///
 /// See [`.indexed_iter_mut()`](ArrayBase::indexed_iter_mut) for more information.
-pub type IndexedIterMut<'a, A, D> = BaseIter<A, D, true, &'a mut A>;
+pub type IndexedIterMut<'a, A, D> = BaseIter<A, D, true, BIItemRefMut<'a, A>>;
 
 /// An iterator that traverses over all axes but one, and yields a view for
 /// each lane along that axis.
 ///
 /// See [`.lanes()`](ArrayBase::lanes) for more information.
-pub type LanesIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, Ix1>>;
+pub type LanesIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, Ix1>>;
 
 /// An iterator that traverses over all dimensions but the innermost,
 /// and yields each inner row (mutable).
 ///
 /// See [`.lanes_mut()`](ArrayBase::lanes_mut)
 /// for more information.
-pub type LanesIterMut<'a, A, D> = BaseIter<A, D, false, ArrayViewMut<'a, A, Ix1>>;
+pub type LanesIterMut<'a, A, D> = BaseIter<A, D, false, BIItemArrayViewMut<'a, A, Ix1>>;
 
 /// Exact chunks iterator.
 ///
 /// See [`.exact_chunks()`](ArrayBase::exact_chunks) for more
 /// information.
-pub type ExactChunksIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, D>>;
+pub type ExactChunksIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, D>>;
 
 /// Exact chunks iterator.
 ///
 /// See [`.exact_chunks_mut()`](ArrayBase::exact_chunks_mut)
 /// for more information.
-pub type ExactChunksIterMut<'a, A, D> = BaseIter<A, D, false, ArrayViewMut<'a, A, D>>;
+pub type ExactChunksIterMut<'a, A, D> = BaseIter<A, D, false, BIItemArrayViewMut<'a, A, D>>;
 
 /// Window iterator.
 ///
 /// See [`.windows()`](ArrayBase::windows) for more
 /// information.
-pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, D>>;
+pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, D>>;
 
 /// An iterator that traverses over an axis and
 /// and yields each subview.
@@ -1128,7 +1161,7 @@ pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, ArrayView<'a, A, D>>;
 /// See [`.outer_iter()`](ArrayBase::outer_iter)
 /// or [`.axis_iter()`](ArrayBase::axis_iter)
 /// for more information.
-pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, ArrayView<'a, A, DI>>;
+pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayView<'a, A, DI>>;
 
 /// An iterator that traverses over an axis and
 /// and yields each subview (mutable)
@@ -1144,144 +1177,7 @@ pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, ArrayView<'a, A, DI>>;
 /// See [`.outer_iter_mut()`](ArrayBase::outer_iter_mut)
 /// or [`.axis_iter_mut()`](ArrayBase::axis_iter_mut)
 /// for more information.
-pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, ArrayViewMut<'a, A, DI>>;
-//=================================================================================================
-
-#[derive(Debug)]
-pub struct AxisIterCore<A, D> {
-    /// Index along the axis of the value of `.next()`, relative to the start
-    /// of the axis.
-    index: Ix,
-    /// (Exclusive) upper bound on `index`. Initially, this is equal to the
-    /// length of the axis.
-    end: Ix,
-    /// Stride along the axis (offset between consecutive pointers).
-    stride: Ixs,
-    /// Shape of the iterator's items.
-    inner_dim: D,
-    /// Strides of the iterator's items.
-    inner_strides: D,
-    /// Pointer corresponding to `index == 0`.
-    ptr: *mut A,
-}
-
-clone_bounds!(
-    [A, D: Clone]
-    AxisIterCore[A, D] {
-        @copy {
-            index,
-            end,
-            stride,
-            ptr,
-        }
-        inner_dim,
-        inner_strides,
-    }
-);
-
-impl<A, D: Dimension> AxisIterCore<A, D> {
-
-    #[inline]
-    unsafe fn offset(&self, index: usize) -> *mut A {
-        debug_assert!(
-            index < self.end,
-            "index={}, end={}, stride={}",
-            index,
-            self.end,
-            self.stride
-        );
-        self.ptr.offset(index as isize * self.stride)
-    }
-
-    /// Splits the iterator at `index`, yielding two disjoint iterators.
-    ///
-    /// `index` is relative to the current state of the iterator (which is not
-    /// necessarily the start of the axis).
-    ///
-    /// **Panics** if `index` is strictly greater than the iterator's remaining
-    /// length.
-    fn split_at(self, index: usize) -> (Self, Self) {
-        assert!(index <= self.len());
-        let mid = self.index + index;
-        let left = AxisIterCore {
-            index: self.index,
-            end: mid,
-            stride: self.stride,
-            inner_dim: self.inner_dim.clone(),
-            inner_strides: self.inner_strides.clone(),
-            ptr: self.ptr,
-        };
-        let right = AxisIterCore {
-            index: mid,
-            end: self.end,
-            stride: self.stride,
-            inner_dim: self.inner_dim,
-            inner_strides: self.inner_strides,
-            ptr: self.ptr,
-        };
-        (left, right)
-    }
-
-    /// Does the same thing as `.next()` but also returns the index of the item
-    /// relative to the start of the axis.
-    fn next_with_index(&mut self) -> Option<(usize, *mut A)> {
-        let index = self.index;
-        self.next().map(|ptr| (index, ptr))
-    }
-
-    /// Does the same thing as `.next_back()` but also returns the index of the
-    /// item relative to the start of the axis.
-    fn next_back_with_index(&mut self) -> Option<(usize, *mut A)> {
-        self.next_back().map(|ptr| (self.end, ptr))
-    }
-}
-
-impl<A, D> Iterator for AxisIterCore<A, D>
-where
-    D: Dimension,
-{
-    type Item = *mut A;
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            None
-        } else {
-            let ptr = unsafe { self.offset(self.index) };
-            self.index += 1;
-            Some(ptr)
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl<A, D> DoubleEndedIterator for AxisIterCore<A, D>
-where
-    D: Dimension,
-{
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            None
-        } else {
-            let ptr = unsafe { self.offset(self.end - 1) };
-            self.end -= 1;
-            Some(ptr)
-        }
-    }
-}
-
-impl<A, D> ExactSizeIterator for AxisIterCore<A, D>
-where
-    D: Dimension,
-{
-    fn len(&self) -> usize {
-        self.end - self.index
-    }
-}
+pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayViewMut<'a, A, DI>>;
 
 /// An iterator that traverses over the specified axis
 /// and yields views of the specified size on this axis.
@@ -1293,176 +1189,7 @@ where
 /// Iterator element type is `ArrayView<'a, A, D>`.
 ///
 /// See [`.axis_chunks_iter()`](ArrayBase::axis_chunks_iter) for more information.
-pub struct AxisChunksIter<'a, A, D> {
-    iter: AxisIterCore<A, D>,
-    /// Index of the partial chunk (the chunk smaller than the specified chunk
-    /// size due to the axis length not being evenly divisible). If the axis
-    /// length is evenly divisible by the chunk size, this index is larger than
-    /// the maximum valid index.
-    partial_chunk_index: usize,
-    /// Dimension of the partial chunk.
-    partial_chunk_dim: D,
-    life: PhantomData<&'a A>,
-}
-
-clone_bounds!(
-    ['a, A, D: Clone]
-    AxisChunksIter['a, A, D] {
-        @copy {
-            life,
-            partial_chunk_index,
-        }
-        iter,
-        partial_chunk_dim,
-    }
-);
-
-/// Computes the information necessary to construct an iterator over chunks
-/// along an axis, given a `view` of the array, the `axis` to iterate over, and
-/// the chunk `size`.
-///
-/// Returns an axis iterator with the correct stride to move between chunks,
-/// the number of chunks, and the shape of the last chunk.
-///
-/// **Panics** if `size == 0`.
-fn chunk_iter_parts<A, D: Dimension>(
-    v: ArrayView<'_, A, D>,
-    axis: Axis,
-    size: usize,
-) -> (AxisIterCore<A, D>, usize, D) {
-    assert_ne!(size, 0, "Chunk size must be nonzero.");
-    let axis_len = v.len_of(axis);
-    let n_whole_chunks = axis_len / size;
-    let chunk_remainder = axis_len % size;
-    let iter_len = if chunk_remainder == 0 {
-        n_whole_chunks
-    } else {
-        n_whole_chunks + 1
-    };
-    let stride = if n_whole_chunks == 0 {
-        // This case avoids potential overflow when `size > axis_len`.
-        0
-    } else {
-        v.stride_of(axis) * size as isize
-    };
-
-    let axis = axis.index();
-    let mut inner_dim = v.dim.clone();
-    inner_dim[axis] = size;
-
-    let mut partial_chunk_dim = v.dim;
-    partial_chunk_dim[axis] = chunk_remainder;
-    let partial_chunk_index = n_whole_chunks;
-
-    let iter = AxisIterCore {
-        index: 0,
-        end: iter_len,
-        stride,
-        inner_dim,
-        inner_strides: v.strides,
-        ptr: v.ptr.as_ptr(),
-    };
-
-    (iter, partial_chunk_index, partial_chunk_dim)
-}
-
-impl<'a, A, D: Dimension> AxisChunksIter<'a, A, D> {
-    pub(crate) fn new(v: ArrayView<'a, A, D>, axis: Axis, size: usize) -> Self {
-        let (iter, partial_chunk_index, partial_chunk_dim) = chunk_iter_parts(v, axis, size);
-        AxisChunksIter {
-            iter,
-            partial_chunk_index,
-            partial_chunk_dim,
-            life: PhantomData,
-        }
-    }
-}
-
-macro_rules! chunk_iter_impl {
-    ($iter:ident, $array:ident) => {
-        impl<'a, A, D> $iter<'a, A, D>
-        where
-            D: Dimension,
-        {
-            fn get_subview(&self, index: usize, ptr: *mut A) -> $array<'a, A, D> {
-                if index != self.partial_chunk_index {
-                    unsafe {
-                        $array::new_(
-                            ptr,
-                            self.iter.inner_dim.clone(),
-                            self.iter.inner_strides.clone(),
-                        )
-                    }
-                } else {
-                    unsafe {
-                        $array::new_(
-                            ptr,
-                            self.partial_chunk_dim.clone(),
-                            self.iter.inner_strides.clone(),
-                        )
-                    }
-                }
-            }
-
-            /// Splits the iterator at index, yielding two disjoint iterators.
-            ///
-            /// `index` is relative to the current state of the iterator (which is not
-            /// necessarily the start of the axis).
-            ///
-            /// **Panics** if `index` is strictly greater than the iterator's remaining
-            /// length.
-            pub fn split_at(self, index: usize) -> (Self, Self) {
-                let (left, right) = self.iter.split_at(index);
-                (
-                    Self {
-                        iter: left,
-                        partial_chunk_index: self.partial_chunk_index,
-                        partial_chunk_dim: self.partial_chunk_dim.clone(),
-                        life: self.life,
-                    },
-                    Self {
-                        iter: right,
-                        partial_chunk_index: self.partial_chunk_index,
-                        partial_chunk_dim: self.partial_chunk_dim,
-                        life: self.life,
-                    },
-                )
-            }
-        }
-
-        impl<'a, A, D> Iterator for $iter<'a, A, D>
-        where
-            D: Dimension,
-        {
-            type Item = $array<'a, A, D>;
-
-            #[inline]
-            fn next(&mut self) -> Option<Self::Item> {
-                self.iter
-                    .next_with_index()
-                    .map(|(index, ptr)| self.get_subview(index, ptr))
-            }
-
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                self.iter.size_hint()
-            }
-        }
-
-        impl<'a, A, D> DoubleEndedIterator for $iter<'a, A, D>
-        where
-            D: Dimension,
-        {
-            #[inline]
-            fn next_back(&mut self) -> Option<Self::Item> {
-                self.iter
-                    .next_back_with_index()
-                    .map(|(index, ptr)| self.get_subview(index, ptr))
-            }
-        }
-
-        impl<'a, A, D> ExactSizeIterator for $iter<'a, A, D> where D: Dimension {}
-    };
-}
+pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, true, BIItemVariableArrayView<'a, A, DI>>;
 
 /// An iterator that traverses over the specified axis
 /// and yields mutable views of the specified size on this axis.
@@ -1475,40 +1202,22 @@ macro_rules! chunk_iter_impl {
 ///
 /// See [`.axis_chunks_iter_mut()`](ArrayBase::axis_chunks_iter_mut)
 /// for more information.
-pub struct AxisChunksIterMut<'a, A, D> {
-    iter: AxisIterCore<A, D>,
-    partial_chunk_index: usize,
-    partial_chunk_dim: D,
-    life: PhantomData<&'a mut A>,
-}
+pub type AxisChunksIterMut<'a, A, DI> =
+    BaseIter<A, Ix1, true, BIItemVariableArrayViewMut<'a, A, DI>>;
 
-impl<'a, A, D: Dimension> AxisChunksIterMut<'a, A, D> {
-    pub(crate) fn new(v: ArrayViewMut<'a, A, D>, axis: Axis, size: usize) -> Self {
-        let (iter, partial_chunk_index, partial_chunk_dim) =
-            chunk_iter_parts(v.into_view(), axis, size);
-        AxisChunksIterMut {
-            iter,
-            partial_chunk_index,
-            partial_chunk_dim,
-            life: PhantomData,
-        }
-    }
-}
-
-chunk_iter_impl!(AxisChunksIter, ArrayView);
-chunk_iter_impl!(AxisChunksIterMut, ArrayViewMut);
+//=================================================================================================
 
 send_sync_read_only!(IndexedIter);
-send_sync_read_only!(AxisChunksIter);
 send_sync_read_only!(Iter);
-send_sync_bi_array_view!(ArrayView, Sync, false);
-send_sync_bi_array_view!(ArrayView, Sync, true);
+send_sync_bi_array_view!(BIItemArrayView, Sync, false);
+send_sync_bi_array_view!(BIItemArrayView, Sync, true);
+send_sync_bi_array_view!(BIItemVariableArrayView, Sync, true);
 
 send_sync_read_write!(IndexedIterMut);
-send_sync_read_write!(AxisChunksIterMut);
 send_sync_read_write!(IterMut);
-send_sync_bi_array_view!(ArrayViewMut, Send, false);
-send_sync_bi_array_view!(ArrayViewMut, Send, true);
+send_sync_bi_array_view!(BIItemArrayViewMut, Send, false);
+send_sync_bi_array_view!(BIItemArrayViewMut, Send, true);
+send_sync_bi_array_view!(BIItemVariableArrayViewMut, Send, true);
 
 /// (Trait used internally) An iterator that we trust
 /// to deliver exactly as many items as it said it would.

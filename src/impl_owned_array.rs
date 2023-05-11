@@ -10,6 +10,7 @@ use crate::imp_prelude::*;
 use crate::dimension;
 use crate::error::{ErrorKind, ShapeError};
 use crate::iterators::BaseIter;
+use crate::iterators::PtrIter;
 use crate::low_level_util::AbortIfPanic;
 use crate::OwnedRepr;
 use crate::Zip;
@@ -707,7 +708,7 @@ where
 
     // iter is a raw pointer iterator traversing the array in memory order now with the
     // sorted axes.
-    let mut iter: BaseIter<A, D,false, *mut A> = BaseIter::new(self_.ptr.as_ptr(), self_.dim, self_.strides,());
+    let mut iter: PtrIter<A, D> = BaseIter::new(self_.ptr.as_ptr(), self_.dim, self_.strides,());
     let mut dropped_elements = 0;
 
     let mut last_ptr = data_ptr;

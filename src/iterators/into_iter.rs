@@ -14,6 +14,7 @@ use crate::imp_prelude::*;
 use crate::OwnedRepr;
 
 use super::BaseIter;
+use super::PtrIter;
 use crate::impl_owned_array::drop_unreachable_raw;
 
 
@@ -23,7 +24,7 @@ where
     D: Dimension,
 {
     array_data: OwnedRepr<A>,
-    inner: BaseIter<A, D,false,*mut A>,
+    inner: PtrIter<A, D>,
     data_len: usize,
     /// first memory address of an array element
     array_head_ptr: NonNull<A>,
