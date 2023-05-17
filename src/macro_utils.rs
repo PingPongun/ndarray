@@ -20,6 +20,7 @@ macro_rules! clone_bounds {
         $($field:ident,)*
     }) => {
         impl<$($parmbounds)*> Clone for $typename<$($parm)*> {
+            #[inline]
             fn clone(&self) -> Self {
                 $typename {
                 $(
