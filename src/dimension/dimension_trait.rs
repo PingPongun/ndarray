@@ -273,18 +273,18 @@ pub trait Dimension:
     }
     #[inline(always)]
     fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
-        let mut contig_stride = 1_isize;
-        // check all dimensions -- a dimension of length 1 can have unequal strides
-        for (&dim, &s) in izip!(self.slice().iter().rev(), strides.slice().iter().rev()) {
-            if dim != 1 {
-                let s = s as isize;
-                if s != contig_stride {
-                    return false;
-                }
-                contig_stride *= dim as isize;
-            }
+        let mut contig_stride = 1;
+        let mut nret = true;
+        let mut i = self.ndim();
+        let mut dim_stride=self.slice().iter().rev().zip( strides.slice().iter().rev());
+        while nret||i != 0  {
+            i-=1;
+            let (&dim, &s) =unsafe{dim_stride.next().unwrap_unchecked()};
+            nret &= s == contig_stride;
+            nret |= dim == 1;
+            contig_stride *= dim;
         }
-        true
+        nret
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after `index`
