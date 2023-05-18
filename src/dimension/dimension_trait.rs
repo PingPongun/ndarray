@@ -276,10 +276,10 @@ pub trait Dimension:
         let mut contig_stride = 1;
         let mut nret = true;
         let mut i = self.ndim();
-        let mut dim_stride=self.slice().iter().rev().zip( strides.slice().iter().rev());
-        while nret||i != 0  {
-            i-=1;
-            let (&dim, &s) =unsafe{dim_stride.next().unwrap_unchecked()};
+        let mut dim_stride = self.slice().iter().rev().zip(strides.slice().iter().rev());
+        while nret && i != 0 {
+            i -= 1;
+            let (&dim, &s) = unsafe { dim_stride.next().unwrap_unchecked() };
             nret &= s == contig_stride;
             nret |= dim == 1;
             contig_stride *= dim;
