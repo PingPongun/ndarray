@@ -257,7 +257,7 @@ pub(crate) mod _macros {
                             unsafe { $ret::new_(ptr, inner.0.clone(), inner.1.clone()) }
                         }
                     } else {
-                        todo!();
+                        unimplemented!();
                     }
                 }
             }
@@ -265,7 +265,7 @@ pub(crate) mod _macros {
     }
 
     macro_rules! BaseIterNdFoldInnerWhile {
-        ($_self:ident,$accum:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr, $offset:ident, $offset_func:ident, $elems_idx:expr ) => {
+        ($_self:ident,$accum:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident, $offset:ident, $elems_idx:expr ) => {
             while 0 != $elems_idx {
                 $elems_idx -= 1;
                 unsafe {
@@ -287,37 +287,50 @@ pub(crate) mod _macros {
     }
     macro_rules! BaseIterNdFoldNStd {
         ($_self:ident,$accum:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr, $offset:ident, $offset_func:ident) => {
-            $_self.elems_left += $_self.elems_left_row[0];
-            $_self.elems_left += $_self.elems_left_row[1];
-            $pre_fold;
-            loop {
-                $_self.elems_left -= $_self.elems_left_row[0];
-                BaseIterNdFoldInnerWhile!(
-                    $_self,
-                    $accum,
-                    $g,
-                    $stride,
-                    $idx,
-                    $idx_step,
-                    $idx_jump_h,
-                    $idx_def,
-                    $offset,
-                    $offset_func,
-                    $_self.elems_left_row[0]
-                );
-                $_self.dim.$idx_jump_h(&mut $_self.$idx);
-                $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                if $_self.elems_left > $_self.dim.last_elem() {
-                    $_self.elems_left_row[0] = $_self.dim.last_elem();
-                } else if $_self.elems_left == 0 {
-                    $_self.elems_left_row_back_idx = 0;
-                    $_self.elems_left_row[1] = 0;
-                    break;
-                } else {
-                    $_self.elems_left_row[0] = $_self.elems_left;
+            if $_self.dim.ndim() == 0 {
+                if $_self.elems_left_row[0] != 0 {
+                    $_self.elems_left_row[0] = 0;
+                    unsafe {
+                        $accum = $g(
+                            $accum,
+                            IdxA!(
+                                &$_self.inner,
+                                $_self.$idx.clone(),
+                                $_self.ptr.offset($_self.$offset)
+                            ),
+                        );
+                    }
                 }
-                if IdxA::IDX {
-                    $_self.$idx.set_last_elem($idx_def);
+            } else {
+                $_self.elems_left += $_self.elems_left_row[0];
+                $_self.elems_left += $_self.elems_left_row[1];
+                $pre_fold;
+                loop {
+                    $_self.elems_left -= $_self.elems_left_row[0];
+                    BaseIterNdFoldInnerWhile!(
+                        $_self,
+                        $accum,
+                        $g,
+                        $stride,
+                        $idx,
+                        $idx_step,
+                        $offset,
+                        $_self.elems_left_row[0]
+                    );
+                    $_self.dim.$idx_jump_h(&mut $_self.$idx);
+                    $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
+                    if $_self.elems_left > $_self.dim.last_elem() {
+                        $_self.elems_left_row[0] = $_self.dim.last_elem();
+                    } else if $_self.elems_left == 0 {
+                        $_self.elems_left_row_back_idx = 0;
+                        $_self.elems_left_row[1] = 0;
+                        break;
+                    } else {
+                        $_self.elems_left_row[0] = $_self.elems_left;
+                    }
+                    if IdxA::IDX {
+                        $_self.$idx.set_last_elem($idx_def);
+                    }
                 }
             }
         };
@@ -741,7 +754,7 @@ mod base_iter_1d {
 mod base_iter_nd {
     use super::*;
     macro_rules! BaseIterNdFold {
-        ($_self:ident,$init:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr,$fold:ident, $offset:ident, $offset_func:ident) => {
+        ($_self:ident,$init:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr,$fold:ident, $offset:ident, $offset_func:ident) => {
             let mut accum = $init;
             if $_self.standard_layout {
                 accum = unsafe {
@@ -795,12 +808,23 @@ mod base_iter_nd {
         /// iterating.
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let elem_count = len.size();
+            let (standard_layout, mut elem_count, len, strides) = len.dim_stride_analysis(&strides);
+            let (elems_left_row, elems_left_row_back_idx);
             let mut end = len.clone();
-            end.slice_mut()
-                .iter_mut()
-                .for_each(|x| *x = x.wrapping_sub(1));
-            let standard_layout = len.is_layout_c_unchecked(&strides);
+            (0..len.ndim()).for_each(|i| unsafe {
+                *end.slice_mut().get_unchecked_mut(i) =
+                    len.slice().get_unchecked(i).wrapping_sub(1);
+            });
+            if elem_count > len.last_elem() && len.ndim() != 0 {
+                //elem_count is multiple of len.last_elem()
+                elem_count -= 2 * len.last_elem();
+                elems_left_row = [len.last_elem(); 2];
+                elems_left_row_back_idx = 1;
+            } else {
+                elems_left_row = [elem_count, 0];
+                elems_left_row_back_idx = 0;
+                elem_count = 0;
+            }
             let offset_back = D::stride_offset(&end, &strides);
             BaseIterNd {
                 ptr,
@@ -810,14 +834,13 @@ mod base_iter_nd {
                 end,
                 elems_left: elem_count,
                 standard_layout,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
+                elems_left_row,
+                elems_left_row_back_idx,
                 offset_front: 0,
                 offset_back,
                 inner,
                 _item: PhantomData,
             }
-            .elems_left_row_calc()
         }
         /// Splits the iterator at `index`, yielding two disjoint iterators.
         ///
@@ -917,7 +940,6 @@ mod base_iter_nd {
                 stride,
                 index,
                 last_wrapping_add,
-                jump_index_unchecked,
                 jump_h_index_unchecked,
                 0,
                 {},
@@ -961,7 +983,6 @@ mod base_iter_nd {
                 stride,
                 end,
                 last_wrapping_sub,
-                jump_index_back_unchecked,
                 jump_h_index_back_unchecked,
                 self.dim.last_elem() - 1,
                 {
@@ -1028,11 +1049,23 @@ mod base_iter_nd_idx {
         /// iterating.
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let elem_count = len.size();
+            let mut elem_count = len.size();
+            let (elems_left_row, elems_left_row_back_idx);
             let mut end = len.clone();
-            end.slice_mut()
-                .iter_mut()
-                .for_each(|x| *x = x.wrapping_sub(1));
+            (0..len.ndim()).for_each(|i| unsafe {
+                *end.slice_mut().get_unchecked_mut(i) =
+                    len.slice().get_unchecked(i).wrapping_sub(1);
+            });
+            if elem_count > len.last_elem() {
+                //elem_count is multiple of len.last_elem()
+                elem_count -= 2 * len.last_elem();
+                elems_left_row = [len.last_elem(); 2];
+                elems_left_row_back_idx = 1;
+            } else {
+                elems_left_row = [elem_count, 0];
+                elems_left_row_back_idx = 0;
+                elem_count = 0;
+            }
             let offset_back = D::stride_offset(&end, &strides);
             BaseIterNdIdx {
                 ptr,
@@ -1041,15 +1074,15 @@ mod base_iter_nd_idx {
                 strides,
                 end,
                 elems_left: elem_count,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
+                elems_left_row,
+                elems_left_row_back_idx,
                 offset_front: 0,
                 offset_back,
                 inner,
                 _item: PhantomData,
             }
-            .elems_left_row_calc()
         }
+
         /// Splits the iterator at `index`, yielding two disjoint iterators.
         ///
         /// `index` is relative to the current state of the iterator (which is not

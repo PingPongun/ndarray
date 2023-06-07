@@ -249,12 +249,19 @@ pub trait Dimension:
     /// same as `jump_index_unchecked` but ignores least significant dim
     #[inline(always)]
     fn jump_h_index_unchecked(&self, index: &mut Self) {
-        for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev().skip(1) {
-            *ix += 1;
-            if *ix != dim {
-                return;
-            } else {
-                *ix = 0;
+        let mut acc = 1;
+        //it is assumed, that it is ensured out of this fn, that ndim() is not 0
+        for j in (0..index.ndim() - 1).rev() {
+            unsafe {
+                let idx = index.slice_mut().get_unchecked_mut(j);
+                let dim = self.slice().get_unchecked(j);
+                *idx += acc;
+                if *idx != *dim {
+                    acc = 0;
+                } else {
+                    *idx = 0;
+                    acc = 1;
+                }
             }
         }
     }
@@ -262,12 +269,19 @@ pub trait Dimension:
     /// same as `jump_index_back_unchecked` but ignores least significant dim
     #[inline(always)]
     fn jump_h_index_back_unchecked(&self, index: &mut Self) {
-        for (&dim, ix) in self.slice().iter().zip(index.slice_mut()).rev().skip(1) {
-            if 0 != *ix {
-                *ix -= 1;
-                return;
-            } else {
-                *ix = dim - 1;
+        let mut acc = 1;
+        //it is assumed, that it is ensured out of this fn, that ndim() is not 0
+        for j in (0..index.ndim() - 1).rev() {
+            unsafe {
+                let idx = index.slice_mut().get_unchecked_mut(j);
+                let dim = self.slice().get_unchecked(j);
+                if 0 != *idx {
+                    *idx -= acc;
+                    acc = 0;
+                } else {
+                    *idx = *dim - 1;
+                    acc = 1;
+                }
             }
         }
     }
@@ -285,6 +299,87 @@ pub trait Dimension:
             contig_stride *= dim;
         }
         nret
+    }
+    /// # Returns
+    /// (is_layout_c, elements_count, dim, strides)
+    #[inline(always)]
+    fn dim_stride_analysis(&self, strides: &Self) -> (bool, usize, Self, Self) {
+        let mut dim_ret = self.clone();
+        let mut strides_ret = strides.clone();
+        if self.ndim() < 2 {
+            if self.ndim() == 0 {
+                (false, 1, dim_ret, strides_ret)
+            } else {
+                (
+                    self[0] == 1 || strides[0] == 1,
+                    self[0],
+                    dim_ret,
+                    strides_ret,
+                )
+            }
+        } else {
+            let mut len = self.last_elem();
+            let mut contig_stride = strides.last_elem() as isize * self.last_elem() as isize;
+
+            let mut contig = true;
+            let contig_stride_axes = (0..self.ndim() - 1).rev().fold(0, |acc, j| unsafe {
+                let dim = self.slice().get_unchecked(j);
+                let stride = strides.slice().get_unchecked(j);
+                let cs = *stride as isize == contig_stride || *dim == 1;
+                contig_stride = *dim as isize * *stride as isize;
+                len *= dim;
+                contig &= cs;
+                acc + contig as usize
+            });
+
+            let standard_layout = contig_stride_axes == self.ndim() - 1 && strides.last_elem() == 1;
+            if contig_stride_axes > 0 {
+                let axes2move = self.ndim() - contig_stride_axes - 1;
+                if standard_layout {
+                    dim_ret
+                        .slice_mut()
+                        .split_at_mut(contig_stride_axes)
+                        .0
+                        .fill(1);
+                    strides_ret
+                        .slice_mut()
+                        .split_at_mut(contig_stride_axes)
+                        .0
+                        .fill(0);
+                    dim_ret.set_last_elem(len);
+                } else {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            self.slice().as_ptr(),
+                            dim_ret.slice_mut().as_mut_ptr().add(contig_stride_axes),
+                            axes2move,
+                        );
+                        core::ptr::copy_nonoverlapping(
+                            strides.slice().as_ptr(),
+                            strides_ret.slice_mut().as_mut_ptr().add(contig_stride_axes),
+                            axes2move,
+                        );
+                    }
+                    let last_dim_composite = unsafe {
+                        (axes2move..self.ndim())
+                            .rev()
+                            .fold(1, |acc, j| acc * self.slice().get_unchecked(j))
+                    };
+                    dim_ret
+                        .slice_mut()
+                        .split_at_mut(contig_stride_axes)
+                        .0
+                        .fill(1);
+                    strides_ret
+                        .slice_mut()
+                        .split_at_mut(contig_stride_axes)
+                        .0
+                        .fill(0);
+                    dim_ret.set_last_elem(last_dim_composite);
+                }
+            }
+            (standard_layout, len, dim_ret, strides_ret)
+        }
     }
     #[doc(hidden)]
     /// Iteration -- Use self as size, and return next index after `index`
@@ -352,21 +447,22 @@ pub trait Dimension:
     #[doc(hidden)]
     /// Return stride offset for index.
     fn stride_offset(index: &Self, strides: &Self) -> isize {
-        let mut offset = 0;
-        for (&i, &s) in index.slice().iter().zip(strides.slice()) {
-            offset += stride_offset(i, s);
-        }
-        offset
+        (0..index.ndim()).rev().fold(0, |acc, j| unsafe {
+            let idx = index.slice().get_unchecked(j);
+            let stride = strides.slice().get_unchecked(j);
+            acc + *idx as isize * *stride as isize
+        })
     }
     #[doc(hidden)]
     /// Return stride offset for index (as if index.last_elem()==0).
     #[inline]
     fn stride_h_offset(index: &Self, strides: &Self) -> isize {
-        let mut offset = 0;
-        for (&i, &s) in index.slice().iter().zip(strides.slice()).rev().skip(1) {
-            offset += stride_offset(i, s);
-        }
-        offset
+        //it is assumed, that it is ensured out of this fn, that ndim() is not 0
+        (0..index.ndim() - 1).rev().fold(0, |acc, j| unsafe {
+            let idx = index.slice().get_unchecked(j);
+            let stride = strides.slice().get_unchecked(j);
+            acc + *idx as isize * *stride as isize
+        })
     }
 
     #[doc(hidden)]
@@ -823,6 +919,23 @@ impl Dimension for Dim<[Ix; 2]> {
         }
         true
     }
+
+    #[inline(always)]
+    fn dim_stride_analysis(&self, strides: &Self) -> (bool, usize, Self, Self) {
+        let ss0 =
+            (self[0] == 1) || (strides[0] as isize == (self[1] as isize * strides[1] as isize));
+        let mut new_dim = self.clone();
+        let elem_count = self[0] * self[1];
+        let mut std_layout = false;
+        if ss0 {
+            //stride is contigous
+            std_layout = strides[1] == 1 || (self[1] == 1 && strides[0] == 1);
+            new_dim[1] = elem_count;
+            new_dim[0] = 1;
+        }
+        (std_layout, elem_count, new_dim, strides.clone())
+    }
+
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
         let mut i = get!(&index, 0);
@@ -1110,6 +1223,35 @@ impl Dimension for Dim<[Ix; 3]> {
         }
         true
     }
+
+    #[inline(always)]
+    fn dim_stride_analysis(&self, strides: &Self) -> (bool, usize, Self, Self) {
+        let ss1 = self[1] == 1 || strides[1] as isize == self[2] as isize * strides[2] as isize;
+        let ss0 = self[0] == 1
+            || strides[0] as isize == self[2] as isize * strides[2] as isize * self[1] as isize;
+        let mut dim = self.clone();
+        let mut new_strides = strides.clone();
+        let elem_count = self[0] * self[1] * self[2];
+        if ss1 {
+            if ss0 {
+                dim[2] = elem_count;
+                dim[1] = 1;
+                dim[0] = 1;
+            } else {
+                dim[2] = self[2] * self[1];
+                dim[1] = self[0];
+                dim[0] = 1;
+                new_strides[1] = strides[0];
+            }
+        }
+        (
+            self.is_layout_c_unchecked(strides),
+            elem_count,
+            dim,
+            new_strides,
+        )
+    }
+
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
         let mut i = get!(&index, 0);
