@@ -381,10 +381,10 @@ mod base_iter_0d {
         pub(crate) fn split_at(
             self,
             _index: usize,
-        ) -> (BaseIter<A, D, IDX, IdxA>, BaseIter<A, D, IDX, IdxA>) {
+        ) -> (Self,Self) {
             let mut right = self.clone();
             right.elems_left = 0;
-            (BaseIter::D0(self), BaseIter::D0(right))
+            (self, right)
         }
     }
 
@@ -473,7 +473,7 @@ mod base_iter_1d {
         pub(crate) fn split_at(
             self,
             index: usize,
-        ) -> (BaseIter<A, D, IDX, IdxA>, BaseIter<A, D, IDX, IdxA>) {
+        ) -> (Self,Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -497,7 +497,7 @@ mod base_iter_1d {
                 inner: self.inner,
                 _item: self._item,
             };
-            (BaseIter::D1(left), BaseIter::D1(right))
+            (left, right)
         }
     }
 
@@ -777,7 +777,7 @@ mod base_iter_nd {
         pub(crate) fn split_at(
             self,
             index: usize,
-        ) -> (BaseIter<A, D, IDX, IdxA>, BaseIter<A, D, IDX, IdxA>) {
+        ) -> (Self,Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -820,7 +820,7 @@ mod base_iter_nd {
                 _item: self._item,
             }
             .elems_left_row_calc();
-            (BaseIter::Dn(left), BaseIter::Dn(right))
+            (left, right)
         }
     }
 
@@ -1018,7 +1018,7 @@ mod base_iter_nd_idx {
         pub(crate) fn split_at(
             self,
             index: usize,
-        ) -> (BaseIter<A, D, IDX, IdxA>, BaseIter<A, D, IDX, IdxA>) {
+        ) -> (Self,Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -1059,7 +1059,7 @@ mod base_iter_nd_idx {
                 _item: self._item,
             }
             .elems_left_row_calc();
-            (BaseIter::DnIdx(left), BaseIter::DnIdx(right))
+            (left,right)
         }
     }
 
@@ -1230,7 +1230,25 @@ mod base_iter {
         /// length.
         #[inline]
         pub fn split_at(self, index: usize) -> (Self, Self) {
-            eitherBI!(self,inner=>inner.split_at(index))
+            match D::NDIM {
+                Some(0) => {
+                    let ret=unwrapBI!(self,D0,inner => inner.split_at(index));
+                    (Self::D0(ret.0),Self::D0(ret.1))
+                }
+                Some(1) => {
+                    let ret=unwrapBI!(self,D1,inner => inner.split_at(index));
+                    (Self::D1(ret.0),Self::D1(ret.1))
+                }
+                _ => {
+                    if IdxA::REQUIRES_IDX {
+                        let ret=unwrapBI!(self,DnIdx,inner => inner.split_at(index));
+                        (Self::DnIdx(ret.0),Self::DnIdx(ret.1))
+                    } else {
+                        let ret=unwrapBI!(self,Dn,inner => inner.split_at(index));
+                        (Self::Dn(ret.0),Self::Dn(ret.1))
+                    }
+                }
+            }
         }
     }
 
