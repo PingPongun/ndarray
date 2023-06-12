@@ -26,7 +26,7 @@ pub use self::into_iter::IntoIter;
 pub use self::lanes::{Lanes, LanesMut};
 pub use self::windows::Windows;
 use super::{ArrayView, ArrayViewMut, Axis, NdProducer};
-use super::{Dimension, IntoDimension, Ixs};
+use super::{Dimension, Ixs};
 use std::slice::{self};
 
 pub struct BaseIter0d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
@@ -62,6 +62,7 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     inner: IdxA::Inner,
     _item: PhantomData<IdxA>,
 }
+//TODO ? merge BaseIterNd & BaseIterNdIdx (but without perf. hit)
 pub struct BaseIterNdIdx<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
     ptr: *mut A,
     dim: D,
@@ -100,7 +101,7 @@ pub(crate) mod _macros {
                 }
                 _ => {
 
-                    if IdxA::IDX
+                    if IdxA::REQUIRES_IDX
                         {unwrapBI!($bi,DnIdx,$inner=>$result)}
                         else
                         {unwrapBI!($bi,Dn,$inner=>$result)}
@@ -119,7 +120,7 @@ pub(crate) mod _macros {
                     unwrapBI!($bi,D1,$inner=>BaseIter::D1($result))
                 }
                 _ => {
-                    if IdxA::IDX
+                    if IdxA::REQUIRES_IDX
                         {unwrapBI!($bi,DnIdx,$inner=>BaseIter::DnIdx($result))}
                         else
                         {unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))}
@@ -129,7 +130,7 @@ pub(crate) mod _macros {
     }
     macro_rules! ifIdx {
         ( $func:expr , $jump:expr) => {
-            if IdxA::IDX {
+            if IdxA::REQUIRES_IDX {
                 let ret = $func;
                 $jump;
                 ret
@@ -140,127 +141,43 @@ pub(crate) mod _macros {
     }
 
     macro_rules! impl_BIItem {
-        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr, $pat:pat => $func:expr) => {
             pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
 
             impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = (D::Pattern, $ret);
                 type Inner = $inner_ty;
-                const W_INNER: bool = true;
-                const IDX: bool = true;
+                const REQUIRES_IDX: bool = true;
 
                 #[inline(always)]
-                fn item_idx_w_inner(
+                fn item(
                     $inner: &Self::Inner,
-                    idx: D::Pattern,
+                    $idx: D,
                     $pat: *mut A,
                 ) -> Self::BIItem {
-                    (idx, $func)
+                    ($idx_op, $func)
                 }
             }
             impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, false> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = $ret;
                 type Inner = $inner_ty;
-                const W_INNER: bool = true;
-                const IDX: bool = false;
+                const REQUIRES_IDX: bool = $req_idx;
 
                 #[inline(always)]
-                fn item_w_inner($inner: &Self::Inner, $pat: *mut A) -> Self::BIItem {
+                fn item($inner: &Self::Inner,
+                    $idx: D, $pat: *mut A) -> Self::BIItem {
                     $func
                 }
             }
         };
-        ( $name:ident, [$($generics_ty:tt)*], $ret:ty ,$pat:pat => $func:expr) => {
-            pub struct $name< $($generics_ty)*>(PhantomData<$ret>);
-
-            impl<'a, A, D: Dimension> BIItemT<A, D, true> for $name<$($generics_ty)*> {
-                type BIItem = (D::Pattern, $ret);
-                type Inner = ();
-                const W_INNER: bool = false;
-                const IDX: bool = true;
-
-                #[inline(always)]
-                fn item_idx(idx: D::Pattern, $pat: *mut A) -> Self::BIItem {
-                    (idx, $func)
-                }
-            }
-            impl<'a, A, D: Dimension> BIItemT<A, D, false> for $name<$($generics_ty)*> {
-                type BIItem = $ret;
-                type Inner = ();
-                const W_INNER: bool = false;
-                const IDX: bool = false;
-
-                #[inline(always)]
-                fn item($pat: *mut A) -> Self::BIItem {
-                    $func
-                }
-            }
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident, $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, $idx, true,$idx.clone().into_pattern(), $pat => $func);
         };
-    }
-    macro_rules! _Idx {
-        ($inner:expr,$idx:expr,$ptr:expr) => {
-            if IdxA::W_INNER == false {
-                IdxA::item_idx($idx, $ptr)
-            } else {
-                IdxA::item_idx_w_inner(&$inner, $idx, $ptr)
-            }
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, _idx, false,_idx.into_pattern(), $pat => $func);
         };
-    }
-    macro_rules! _nIdx {
-        ($inner:expr,$ptr:expr) => {
-            if IdxA::W_INNER == false {
-                IdxA::item($ptr)
-            } else {
-                IdxA::item_w_inner(&$inner, $ptr)
-            }
-        };
-    }
-    macro_rules! IdxA {
-        ($inner:expr,$idx:expr,$ptr:expr,$idx_expr:expr,$nidx_expr:expr) => {
-            if IdxA::IDX {
-                $idx_expr;
-                _Idx!($inner, $idx.into_pattern(), $ptr)
-            } else {
-                $nidx_expr;
-                _nIdx!($inner, $ptr)
-            }
-        };
-        ($inner:expr,$idx:expr,$ptr:expr) => {
-            IdxA!($inner, $idx, $ptr, {}, {})
-        };
-        ($inner:expr,$idx:expr,$ptr:expr,$idx_expr:expr) => {
-            IdxA!($inner, $idx, $ptr, $idx_expr, {})
-        };
-    }
-    macro_rules! impl_BIItemVariableArrayView {
-        ($name:ident, $ret:ident) => {
-            pub struct $name<'a, A, DI>(PhantomData<$ret<'a, A, DI>>);
-
-            impl<'a, A, D: Dimension, DI: Clone + Dimension> BIItemT<A, D, true>
-                for $name<'a, A, DI>
-            {
-                type BIItem = $ret<'a, A, DI>;
-                //(DI, DI, usize, DI) -> (Internal_Dim, Internal_Strides, Index_of_partial_view, Dim_of_partial_view)
-                type Inner = (DI, DI, usize, DI);
-                const W_INNER: bool = true;
-                const IDX: bool = true;
-                #[inline(always)]
-                fn item_idx_w_inner(
-                    inner: &Self::Inner,
-                    idx: D::Pattern,
-                    ptr: *mut A,
-                ) -> Self::BIItem {
-                    if D::NDIM == Some(1) {
-                        if idx.into_dimension()[0] == inner.2 {
-                            unsafe { $ret::new_(ptr, inner.3.clone(), inner.1.clone()) }
-                        } else {
-                            unsafe { $ret::new_(ptr, inner.0.clone(), inner.1.clone()) }
-                        }
-                    } else {
-                        unimplemented!();
-                    }
-                }
-            }
+        ( $name:ident, [$($generics_ty:tt)*], $ret:ty , $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [], [], $ret, (), _inner, $pat => $func);
         };
     }
 
@@ -271,15 +188,15 @@ pub(crate) mod _macros {
                 unsafe {
                     $accum = $g(
                         $accum,
-                        IdxA!(
+                        IdxA::item(
                             &$_self.inner,
                             $_self.$idx.clone(),
-                            $_self.ptr.offset($_self.$offset)
+                            $_self.ptr.offset($_self.$offset),
                         ),
                     );
                 }
                 $_self.$offset += $stride;
-                if IdxA::IDX {
+                if IdxA::REQUIRES_IDX {
                     $_self.$idx.$idx_step(1);
                 }
             }
@@ -293,10 +210,10 @@ pub(crate) mod _macros {
                     unsafe {
                         $accum = $g(
                             $accum,
-                            IdxA!(
+                            IdxA::item(
                                 &$_self.inner,
                                 $_self.$idx.clone(),
-                                $_self.ptr.offset($_self.$offset)
+                                $_self.ptr.offset($_self.$offset),
                             ),
                         );
                     }
@@ -328,7 +245,7 @@ pub(crate) mod _macros {
                     } else {
                         $_self.elems_left_row[0] = $_self.elems_left;
                     }
-                    if IdxA::IDX {
+                    if IdxA::REQUIRES_IDX {
                         $_self.$idx.set_last_elem($idx_def);
                     }
                 }
@@ -351,7 +268,7 @@ pub(crate) mod _macros {
                             $_self.elems_left_row[0] = 0;
                             let index = $_self.$idx.clone();
                             let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                            Some(IdxA!(&$_self.inner, index, ret))
+                            Some(IdxA::item(&$_self.inner, index, ret))
                         }
                     } else {
                         //switching to last row
@@ -363,11 +280,11 @@ pub(crate) mod _macros {
                         }
                         $_self.elems_left_row_back_idx = 0;
                         $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
-                        if IdxA::IDX {
+                        if IdxA::REQUIRES_IDX {
                             $_self.$idx.set_last_elem($idx_def);
                         }
                         $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                        Some(IdxA!(&$_self.inner, index, ret))
+                        Some(IdxA::item(&$_self.inner, index, ret))
                     }
                 } else {
                     //last element in each row
@@ -376,11 +293,11 @@ pub(crate) mod _macros {
                     $_self.elems_left -= $_self.dim.last_elem();
                     $_self.elems_left_row[$elems_idx] = $_self.dim.last_elem();
                     $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
-                    if IdxA::IDX {
+                    if IdxA::REQUIRES_IDX {
                         $_self.$idx.set_last_elem($idx_def);
                     }
                     $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                    Some(IdxA!(&$_self.inner, index, ret))
+                    Some(IdxA::item(&$_self.inner, index, ret))
                 }
             } else {
                 //normal(not last in row) element
@@ -388,10 +305,10 @@ pub(crate) mod _macros {
                 let index = $_self.$idx.clone();
                 let ret = unsafe { $_self.ptr.offset($_self.$offset) };
                 $_self.$offset += $stride;
-                if IdxA::IDX {
+                if IdxA::REQUIRES_IDX {
                     $_self.$idx.$idx_step(1);
                 }
-                Some(IdxA!(&$_self.inner, index, ret))
+                Some(IdxA::item(&$_self.inner, index, ret))
             }
         };
     }
@@ -400,25 +317,8 @@ pub(crate) mod _macros {
 pub trait BIItemT<A, D: Dimension, const IDX: bool> {
     type BIItem;
     type Inner: Clone;
-    const W_INNER: bool;
-    const IDX: bool;
-
-    #[inline(always)]
-    fn item(_val: *mut A) -> Self::BIItem {
-        unreachable!()
-    }
-    #[inline(always)]
-    fn item_idx(_idx: D::Pattern, _val: *mut A) -> Self::BIItem {
-        unreachable!()
-    }
-    #[inline(always)]
-    fn item_w_inner(_inner: &Self::Inner, _val: *mut A) -> Self::BIItem {
-        unreachable!()
-    }
-    #[inline(always)]
-    fn item_idx_w_inner(_inner: &Self::Inner, _idx: D::Pattern, _val: *mut A) -> Self::BIItem {
-        unreachable!()
-    }
+    const REQUIRES_IDX: bool;
+    fn item(_inner: &Self::Inner, _idx: D, _val: *mut A) -> Self::BIItem;
 }
 impl_BIItem!(BIItemPtr, [A], *mut A,ptr =>ptr);
 impl_BIItem!(BIItemRef, ['a, A], &'a A,ptr => unsafe{&*ptr});
@@ -428,8 +328,30 @@ impl_BIItem!(BIItemArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a
     ptr => unsafe{ArrayView::new_(ptr,inner.0.clone(), inner.1.clone() )});
 impl_BIItem!(BIItemArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI,DI), inner,
     ptr => unsafe{ArrayViewMut::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItemVariableArrayView!(BIItemVariableArrayView, ArrayView);
-impl_BIItemVariableArrayView!(BIItemVariableArrayViewMut, ArrayViewMut);
+impl_BIItem!(BIItemVariableArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI, DI, usize, DI), inner,idx,
+ptr => {
+    if D::NDIM == Some(1) {
+        if idx[0] == inner.2 {
+            unsafe { ArrayView::new_(ptr, inner.3.clone(), inner.1.clone()) }
+        } else {
+            unsafe { ArrayView::new_(ptr, inner.0.clone(), inner.1.clone()) }
+        }
+    } else {
+        unimplemented!();
+    }
+});
+impl_BIItem!(BIItemVariableArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI, DI, usize, DI), inner,idx,
+ptr => {
+    if D::NDIM == Some(1) {
+        if idx[0] == inner.2 {
+            unsafe { ArrayViewMut::new_(ptr, inner.3.clone(), inner.1.clone()) }
+        } else {
+            unsafe { ArrayViewMut::new_(ptr, inner.0.clone(), inner.1.clone()) }
+        }
+    } else {
+        unimplemented!();
+    }
+});
 
 //=================================================================================================
 mod base_iter_0d {
@@ -475,7 +397,7 @@ mod base_iter_0d {
         fn next(&mut self) -> Option<Self::Item> {
             if self.elems_left == 1 {
                 self.elems_left = 0;
-                Some(IdxA!(&self.inner, D::default(), self.ptr))
+                Some(IdxA::item(&self.inner, D::default(), self.ptr))
             } else {
                 None
             }
@@ -595,7 +517,7 @@ mod base_iter_1d {
                 };
                 let index = self.index.clone();
                 self.index.last_wrapping_add(1);
-                Some(IdxA!(&self.inner, index, ret, {}))
+                Some(IdxA::item(&self.inner, index, ret))
             }
         }
 
@@ -612,7 +534,7 @@ mod base_iter_1d {
                 };
                 let index = self.index.clone();
                 self.index.last_wrapping_add(1);
-                Some(IdxA!(&self.inner, index, ret))
+                Some(IdxA::item(&self.inner, index, ret))
             }
         }
         #[inline(always)]
@@ -636,7 +558,7 @@ mod base_iter_1d {
                     .iter_mut()
                     .fold(accum, |acc, ptr| {
                         ifIdx!(
-                            g(acc, IdxA!(&self.inner, self.index.clone(), ptr)),
+                            g(acc, IdxA::item(&self.inner, self.index.clone(), ptr)),
                             self.dim.jump_index_unchecked(&mut self.index)
                         )
                     })
@@ -648,7 +570,7 @@ mod base_iter_1d {
                     unsafe {
                         accum = g(
                             accum,
-                            IdxA!(&self.inner, self.index.clone(), self.ptr.offset(offset)),
+                            IdxA::item(&self.inner, self.index.clone(), self.ptr.offset(offset)),
                         );
                     }
                     self.index.last_wrapping_add(1);
@@ -669,7 +591,7 @@ mod base_iter_1d {
             } else {
                 self.end.last_wrapping_sub(1);
                 let ret = unsafe { self.ptr.offset(D::stride_offset(&self.end, &self.strides)) };
-                Some(IdxA!(&self.inner, self.end.clone(), ret))
+                Some(IdxA::item(&self.inner, self.end.clone(), ret))
             }
         }
 
@@ -681,7 +603,7 @@ mod base_iter_1d {
             } else {
                 self.end.last_wrapping_sub(count + 1);
                 let ret = unsafe { self.ptr.offset(D::stride_offset(&self.end, &self.strides)) };
-                Some(IdxA!(&self.inner, self.end.clone(), ret))
+                Some(IdxA::item(&self.inner, self.end.clone(), ret))
             }
         }
         #[inline(always)]
@@ -703,7 +625,7 @@ mod base_iter_1d {
                 .iter_mut()
                 .rfold(accum, |acc, ptr| {
                     ifIdx!(
-                        g(acc, IdxA!(&self.inner, end.clone(), ptr)),
+                        g(acc, IdxA::item(&self.inner, end.clone(), ptr)),
                         self.dim.jump_index_back_unchecked(&mut self.end)
                     )
                 });
@@ -715,7 +637,7 @@ mod base_iter_1d {
                     unsafe {
                         accum = g(
                             accum,
-                            IdxA!(&self.inner, self.end.clone(), self.ptr.offset(offset)),
+                            IdxA::item(&self.inner, self.end.clone(), self.ptr.offset(offset)),
                         );
                     }
                     offset -= stride;
@@ -764,7 +686,9 @@ mod base_iter_nd {
                     )
                 }
                 .iter_mut()
-                .$fold(accum, |acc, ptr| $g(acc, _nIdx!(&$_self.inner, ptr)));
+                .$fold(accum, |acc, ptr| {
+                    $g(acc, IdxA::item(&$_self.inner, $_self.$idx.clone(), ptr))
+                });
                 $_self.elems_left = 0;
                 $_self.elems_left_row = [0, 0];
                 $_self.elems_left_row_back_idx = 0;
@@ -1288,7 +1212,7 @@ mod base_iter {
                 Some(0) => Self::D0(BaseIter0d::new(ptr, inner)),
                 Some(1) => Self::D1(BaseIter1d::new(ptr, len, strides, inner)),
                 _ => {
-                    if IdxA::IDX {
+                    if IdxA::REQUIRES_IDX {
                         Self::DnIdx(BaseIterNdIdx::new(ptr, len, strides, inner))
                     } else {
                         Self::Dn(BaseIterNd::new(ptr, len, strides, inner))
@@ -1409,7 +1333,11 @@ impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, 
     }
 
     unsafe fn as_ref(&self, ptr: Self::Ptr) -> Self::Item {
-        IdxA!(unwrapBI!(self, D1).inner, unwrapBI!(self, D1).index, ptr)
+        IdxA::item(
+            &unwrapBI!(self, D1).inner,
+            unwrapBI!(self, D1).index.clone(),
+            ptr,
+        )
     }
 
     unsafe fn uget_ptr(&self, i: &Self::Dim) -> Self::Ptr {
@@ -1528,7 +1456,7 @@ pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayViewMut<'a,
 /// Iterator element type is `ArrayView<'a, A, D>`.
 ///
 /// See [`.axis_chunks_iter()`](ArrayBase::axis_chunks_iter) for more information.
-pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, true, BIItemVariableArrayView<'a, A, DI>>;
+pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemVariableArrayView<'a, A, DI>>;
 
 /// An iterator that traverses over the specified axis
 /// and yields mutable views of the specified size on this axis.
@@ -1542,21 +1470,19 @@ pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, true, BIItemVariableArrayV
 /// See [`.axis_chunks_iter_mut()`](ArrayBase::axis_chunks_iter_mut)
 /// for more information.
 pub type AxisChunksIterMut<'a, A, DI> =
-    BaseIter<A, Ix1, true, BIItemVariableArrayViewMut<'a, A, DI>>;
+    BaseIter<A, Ix1, false, BIItemVariableArrayViewMut<'a, A, DI>>;
 
 //=================================================================================================
 
 send_sync_read_only!(IndexedIter);
 send_sync_read_only!(Iter);
-send_sync_bi_array_view!(BIItemArrayView, Sync, false);
-send_sync_bi_array_view!(BIItemArrayView, Sync, true);
-send_sync_bi_array_view!(BIItemVariableArrayView, Sync, true);
+send_sync_bi_array_view!(BIItemArrayView, Sync);
+send_sync_bi_array_view!(BIItemVariableArrayView, Sync);
 
 send_sync_read_write!(IndexedIterMut);
 send_sync_read_write!(IterMut);
-send_sync_bi_array_view!(BIItemArrayViewMut, Send, false);
-send_sync_bi_array_view!(BIItemArrayViewMut, Send, true);
-send_sync_bi_array_view!(BIItemVariableArrayViewMut, Send, true);
+send_sync_bi_array_view!(BIItemArrayViewMut, Send);
+send_sync_bi_array_view!(BIItemVariableArrayViewMut, Send);
 
 /// (Trait used internally) An iterator that we trust
 /// to deliver exactly as many items as it said it would.

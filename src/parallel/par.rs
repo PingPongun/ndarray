@@ -124,59 +124,33 @@ macro_rules! BI_par_iter_wrapper {
     }
 
     };
+    ([$($generics:tt)*], $item:ty, [$($thread_bounds:tt)*]) => {
+        BI_par_iter_wrapper!([$($generics)*], $item, false, [$($thread_bounds)*], []);
+        BI_par_iter_wrapper!([$($generics)*], $item, true, [$($thread_bounds)*], [D::Pattern: Send]);
+    }
 }
 
-BI_par_iter_wrapper!([], BIItemRef<'a, A>, false, [Sync], []);
-BI_par_iter_wrapper!([], BIItemRefMut<'a, A>, false, [Sync + Send], []);
+BI_par_iter_wrapper!([], BIItemRef<'a, A>, [Sync]);
+BI_par_iter_wrapper!([], BIItemRefMut<'a, A>, [Sync + Send]);
 BI_par_iter_wrapper!(
     [DI: Dimension],
     BIItemArrayView<'a, A, DI>,
-    false,
-    [Sync],
-    []
+    [Sync]
 );
 BI_par_iter_wrapper!(
     [DI: Dimension],
     BIItemArrayViewMut<'a, A, DI>,
-    false,
-    [Sync + Send],
-    []
-);
-BI_par_iter_wrapper!([], BIItemRef<'a, A>, true, [Sync], [D::Pattern: Send]);
-BI_par_iter_wrapper!(
-    [],
-    BIItemRefMut<'a, A>,
-    true,
-    [Sync + Send],
-    [D::Pattern: Send]
-);
-BI_par_iter_wrapper!(
-    [DI: Dimension],
-    BIItemArrayView<'a, A, DI>,
-    true,
-    [Sync],
-    [D::Pattern: Send]
-);
-BI_par_iter_wrapper!(
-    [DI: Dimension],
-    BIItemArrayViewMut<'a, A, DI>,
-    true,
-    [Sync + Send],
-    [D::Pattern: Send]
+    [Sync + Send]
 );
 BI_par_iter_wrapper!(
     [DI: Dimension],
     BIItemVariableArrayView<'a, A, DI>,
-    true,
-    [Sync],
-    [D::Pattern: Send]
+    [Sync]
 );
 BI_par_iter_wrapper!(
     [DI: Dimension],
     BIItemVariableArrayViewMut<'a, A, DI>,
-    true,
-    [Sync + Send],
-    [D::Pattern: Send]
+    [Sync + Send]
 );
 
 macro_rules! par_iter_view_wrapper {

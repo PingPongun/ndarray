@@ -52,6 +52,10 @@ macro_rules! send_sync_bi_array_view {
         {
         }
     };
+    ($name:ident,$A_trait:ident) => {
+        send_sync_bi_array_view!($name,$A_trait,false);
+        send_sync_bi_array_view!($name,$A_trait,true);
+    };
 }
 
 macro_rules! impl_ndproducer {
