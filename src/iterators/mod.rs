@@ -62,31 +62,15 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     inner: IdxA::Inner,
     _item: PhantomData<IdxA>,
 }
-//TODO ? merge BaseIterNd & BaseIterNdIdx (but without perf. hit)
-pub struct BaseIterNdIdx<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
-    ptr: *mut A,
-    dim: D,
-    strides: D,
-    end: D,
-    elems_left: usize,
-    index: D,
-    elems_left_row: [usize; 2],
-    elems_left_row_back_idx: usize,
-    offset_front: isize,
-    offset_back: isize,
-    inner: IdxA::Inner,
-    _item: PhantomData<IdxA>,
-}
+
 /// Base for iterators over all axes.
 ///
 /// Iterator element type is `*mut A`.
 /// index and end values are only valid indices when elements_left >= 1
-
 pub enum BaseIter<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
     D0(BaseIter0d<A, D, IDX, IdxA>),
     D1(BaseIter1d<A, D, IDX, IdxA>),
     Dn(BaseIterNd<A, D, IDX, IdxA>),
-    DnIdx(BaseIterNdIdx<A, D, IDX, IdxA>),
 }
 #[macro_use]
 pub(crate) mod _macros {
@@ -100,11 +84,7 @@ pub(crate) mod _macros {
                     unwrapBI!($bi,D1,$inner=>$result)
                 }
                 _ => {
-
-                    if IdxA::REQUIRES_IDX
-                        {unwrapBI!($bi,DnIdx,$inner=>$result)}
-                        else
-                        {unwrapBI!($bi,Dn,$inner=>$result)}
+                    unwrapBI!($bi,Dn,$inner=>$result)
                 }
             }
         };
@@ -120,10 +100,7 @@ pub(crate) mod _macros {
                     unwrapBI!($bi,D1,$inner=>BaseIter::D1($result))
                 }
                 _ => {
-                    if IdxA::REQUIRES_IDX
-                        {unwrapBI!($bi,DnIdx,$inner=>BaseIter::DnIdx($result))}
-                        else
-                        {unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))}
+                    unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))
                 }
             }
         };
@@ -139,9 +116,17 @@ pub(crate) mod _macros {
             }
         };
     }
-
+    macro_rules! IdxA {
+        ($inner:expr,$idx:expr,$ptr:expr) => {
+            if IdxA::REQUIRES_IDX {
+                IdxA::item_w_idx(&$inner, $idx, $ptr)
+            } else {
+                IdxA::item(&$inner, $ptr)
+            }
+        };
+    }
     macro_rules! impl_BIItem {
-        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr, $pat:pat => $func:expr) => {
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr,$n_idx_item:expr, $pat:pat => $func:expr) => {
             pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
 
             impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
@@ -150,7 +135,7 @@ pub(crate) mod _macros {
                 const REQUIRES_IDX: bool = true;
 
                 #[inline(always)]
-                fn item(
+                fn item_w_idx(
                     $inner: &Self::Inner,
                     $idx: D,
                     $pat: *mut A,
@@ -165,16 +150,21 @@ pub(crate) mod _macros {
 
                 #[inline(always)]
                 fn item($inner: &Self::Inner,
+                    $pat: *mut A) -> Self::BIItem {
+                    $n_idx_item
+                }
+                #[inline(always)]
+                fn item_w_idx($inner: &Self::Inner,
                     $idx: D, $pat: *mut A) -> Self::BIItem {
                     $func
                 }
             }
         };
         ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident, $pat:pat => $func:expr) => {
-            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, $idx, true,$idx.clone().into_pattern(), $pat => $func);
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, $idx, true, $idx.clone().into_pattern(), unsafe{unreachable_unchecked()}, $pat => $func);
         };
         ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
-            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, _idx, false,_idx.into_pattern(), $pat => $func);
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, _idx, false, _idx.into_pattern(), $func, $pat => $func);
         };
         ( $name:ident, [$($generics_ty:tt)*], $ret:ty , $pat:pat => $func:expr) => {
             impl_BIItem!( $name, [$($generics_ty)*], [], [], $ret, (), _inner, $pat => $func);
@@ -188,10 +178,10 @@ pub(crate) mod _macros {
                 unsafe {
                     $accum = $g(
                         $accum,
-                        IdxA::item(
-                            &$_self.inner,
+                        IdxA!(
+                            $_self.inner,
                             $_self.$idx.clone(),
-                            $_self.ptr.offset($_self.$offset),
+                            $_self.ptr.offset($_self.$offset)
                         ),
                     );
                 }
@@ -210,10 +200,10 @@ pub(crate) mod _macros {
                     unsafe {
                         $accum = $g(
                             $accum,
-                            IdxA::item(
-                                &$_self.inner,
+                            IdxA!(
+                                $_self.inner,
                                 $_self.$idx.clone(),
-                                $_self.ptr.offset($_self.$offset),
+                                $_self.ptr.offset($_self.$offset)
                             ),
                         );
                     }
@@ -268,7 +258,7 @@ pub(crate) mod _macros {
                             $_self.elems_left_row[0] = 0;
                             let index = $_self.$idx.clone();
                             let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                            Some(IdxA::item(&$_self.inner, index, ret))
+                            Some(IdxA!($_self.inner, index, ret))
                         }
                     } else {
                         //switching to last row
@@ -284,7 +274,7 @@ pub(crate) mod _macros {
                             $_self.$idx.set_last_elem($idx_def);
                         }
                         $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                        Some(IdxA::item(&$_self.inner, index, ret))
+                        Some(IdxA!($_self.inner, index, ret))
                     }
                 } else {
                     //last element in each row
@@ -297,7 +287,7 @@ pub(crate) mod _macros {
                         $_self.$idx.set_last_elem($idx_def);
                     }
                     $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                    Some(IdxA::item(&$_self.inner, index, ret))
+                    Some(IdxA!($_self.inner, index, ret))
                 }
             } else {
                 //normal(not last in row) element
@@ -308,7 +298,7 @@ pub(crate) mod _macros {
                 if IdxA::REQUIRES_IDX {
                     $_self.$idx.$idx_step(1);
                 }
-                Some(IdxA::item(&$_self.inner, index, ret))
+                Some(IdxA!($_self.inner, index, ret))
             }
         };
     }
@@ -318,7 +308,18 @@ pub trait BIItemT<A, D: Dimension, const IDX: bool> {
     type BIItem;
     type Inner: Clone;
     const REQUIRES_IDX: bool;
-    fn item(_inner: &Self::Inner, _idx: D, _val: *mut A) -> Self::BIItem;
+    #[inline(always)]
+    fn item(_inner: &Self::Inner, _val: *mut A) -> Self::BIItem {
+        unsafe {
+            unreachable_unchecked();
+        }
+    }
+    #[inline(always)]
+    fn item_w_idx(_inner: &Self::Inner, _idx: D, _val: *mut A) -> Self::BIItem {
+        unsafe {
+            unreachable_unchecked();
+        }
+    }
 }
 impl_BIItem!(BIItemPtr, [A], *mut A,ptr =>ptr);
 impl_BIItem!(BIItemRef, ['a, A], &'a A,ptr => unsafe{&*ptr});
@@ -328,25 +329,25 @@ impl_BIItem!(BIItemArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a
     ptr => unsafe{ArrayView::new_(ptr,inner.0.clone(), inner.1.clone() )});
 impl_BIItem!(BIItemArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI,DI), inner,
     ptr => unsafe{ArrayViewMut::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItem!(BIItemVariableArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI, DI, usize, DI), inner,idx,
-ptr => {
+impl_BIItem!(BIItemVariableArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI, DI, usize, DI), _inner,idx,
+_ptr => {
     if D::NDIM == Some(1) {
-        if idx[0] == inner.2 {
-            unsafe { ArrayView::new_(ptr, inner.3.clone(), inner.1.clone()) }
+        if idx[0] == _inner.2 {
+            unsafe { ArrayView::new_(_ptr, _inner.3.clone(), _inner.1.clone()) }
         } else {
-            unsafe { ArrayView::new_(ptr, inner.0.clone(), inner.1.clone()) }
+            unsafe { ArrayView::new_(_ptr, _inner.0.clone(), _inner.1.clone()) }
         }
     } else {
         unimplemented!();
     }
 });
-impl_BIItem!(BIItemVariableArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI, DI, usize, DI), inner,idx,
-ptr => {
+impl_BIItem!(BIItemVariableArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI, DI, usize, DI), _inner,idx,
+_ptr => {
     if D::NDIM == Some(1) {
-        if idx[0] == inner.2 {
-            unsafe { ArrayViewMut::new_(ptr, inner.3.clone(), inner.1.clone()) }
+        if idx[0] == _inner.2 {
+            unsafe { ArrayViewMut::new_(_ptr, _inner.3.clone(), _inner.1.clone()) }
         } else {
-            unsafe { ArrayViewMut::new_(ptr, inner.0.clone(), inner.1.clone()) }
+            unsafe { ArrayViewMut::new_(_ptr, _inner.0.clone(), _inner.1.clone()) }
         }
     } else {
         unimplemented!();
@@ -378,10 +379,7 @@ mod base_iter_0d {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline(always)]
-        pub(crate) fn split_at(
-            self,
-            _index: usize,
-        ) -> (Self,Self) {
+        pub(crate) fn split_at(self, _index: usize) -> (Self, Self) {
             let mut right = self.clone();
             right.elems_left = 0;
             (self, right)
@@ -397,7 +395,7 @@ mod base_iter_0d {
         fn next(&mut self) -> Option<Self::Item> {
             if self.elems_left == 1 {
                 self.elems_left = 0;
-                Some(IdxA::item(&self.inner, D::default(), self.ptr))
+                Some(IdxA!(self.inner, D::default(), self.ptr))
             } else {
                 None
             }
@@ -470,10 +468,7 @@ mod base_iter_1d {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline(always)]
-        pub(crate) fn split_at(
-            self,
-            index: usize,
-        ) -> (Self,Self) {
+        pub(crate) fn split_at(self, index: usize) -> (Self, Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -517,7 +512,7 @@ mod base_iter_1d {
                 };
                 let index = self.index.clone();
                 self.index.last_wrapping_add(1);
-                Some(IdxA::item(&self.inner, index, ret))
+                Some(IdxA!(self.inner, index, ret))
             }
         }
 
@@ -534,7 +529,7 @@ mod base_iter_1d {
                 };
                 let index = self.index.clone();
                 self.index.last_wrapping_add(1);
-                Some(IdxA::item(&self.inner, index, ret))
+                Some(IdxA!(self.inner, index, ret))
             }
         }
         #[inline(always)]
@@ -558,7 +553,7 @@ mod base_iter_1d {
                     .iter_mut()
                     .fold(accum, |acc, ptr| {
                         ifIdx!(
-                            g(acc, IdxA::item(&self.inner, self.index.clone(), ptr)),
+                            g(acc, IdxA!(self.inner, self.index.clone(), ptr)),
                             self.dim.jump_index_unchecked(&mut self.index)
                         )
                     })
@@ -570,7 +565,7 @@ mod base_iter_1d {
                     unsafe {
                         accum = g(
                             accum,
-                            IdxA::item(&self.inner, self.index.clone(), self.ptr.offset(offset)),
+                            IdxA!(self.inner, self.index.clone(), self.ptr.offset(offset)),
                         );
                     }
                     self.index.last_wrapping_add(1);
@@ -591,7 +586,7 @@ mod base_iter_1d {
             } else {
                 self.end.last_wrapping_sub(1);
                 let ret = unsafe { self.ptr.offset(D::stride_offset(&self.end, &self.strides)) };
-                Some(IdxA::item(&self.inner, self.end.clone(), ret))
+                Some(IdxA!(self.inner, self.end.clone(), ret))
             }
         }
 
@@ -603,7 +598,7 @@ mod base_iter_1d {
             } else {
                 self.end.last_wrapping_sub(count + 1);
                 let ret = unsafe { self.ptr.offset(D::stride_offset(&self.end, &self.strides)) };
-                Some(IdxA::item(&self.inner, self.end.clone(), ret))
+                Some(IdxA!(self.inner, self.end.clone(), ret))
             }
         }
         #[inline(always)]
@@ -625,7 +620,7 @@ mod base_iter_1d {
                 .iter_mut()
                 .rfold(accum, |acc, ptr| {
                     ifIdx!(
-                        g(acc, IdxA::item(&self.inner, end.clone(), ptr)),
+                        g(acc, IdxA!(self.inner, end.clone(), ptr)),
                         self.dim.jump_index_back_unchecked(&mut self.end)
                     )
                 });
@@ -637,7 +632,7 @@ mod base_iter_1d {
                     unsafe {
                         accum = g(
                             accum,
-                            IdxA::item(&self.inner, self.end.clone(), self.ptr.offset(offset)),
+                            IdxA!(self.inner, self.end.clone(), self.ptr.offset(offset)),
                         );
                     }
                     offset -= stride;
@@ -687,7 +682,7 @@ mod base_iter_nd {
                 }
                 .iter_mut()
                 .$fold(accum, |acc, ptr| {
-                    $g(acc, IdxA::item(&$_self.inner, $_self.$idx.clone(), ptr))
+                    $g(acc, IdxA!($_self.inner, $_self.$idx.clone(), ptr))
                 });
                 $_self.elems_left = 0;
                 $_self.elems_left_row = [0, 0];
@@ -732,7 +727,11 @@ mod base_iter_nd {
         /// iterating.
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let (standard_layout, mut elem_count, len, strides) = len.dim_stride_analysis(&strides);
+            let (standard_layout, mut elem_count, len, strides) = if IdxA::REQUIRES_IDX {
+                (false, len.size(), len, strides)
+            } else {
+                len.dim_stride_analysis(&strides)
+            };
             let (elems_left_row, elems_left_row_back_idx);
             let mut end = len.clone();
             (0..len.ndim()).for_each(|i| unsafe {
@@ -774,10 +773,7 @@ mod base_iter_nd {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline(always)]
-        pub(crate) fn split_at(
-            self,
-            index: usize,
-        ) -> (Self,Self) {
+        pub(crate) fn split_at(self, index: usize) -> (Self, Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -949,245 +945,7 @@ mod base_iter_nd {
     );
 }
 //=================================================================================================
-mod base_iter_nd_idx {
-    use super::*;
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIterNdIdx<A, D, IDX, IdxA> {
-        #[inline(always)]
-        fn elems_left_row_calc(mut self) -> Self {
-            if self.elems_left > self.dim.last_elem() {
-                self.elems_left_row = [
-                    self.dim.last_elem() - self.index.last_elem(),
-                    self.end.last_elem() + 1,
-                ];
-                self.elems_left = self.elems_left - self.elems_left_row[0] - self.elems_left_row[1];
-                self.elems_left_row_back_idx = 1;
-            } else {
-                self.elems_left_row = [self.elems_left, 0];
-                self.elems_left = 0;
-                self.elems_left_row_back_idx = 0;
-            }
-            self
-        }
-        /// Creating a Baseiter is unsafe because shape and stride parameters need
-        /// to be correct to avoid performing an unsafe pointer offset while
-        /// iterating.
-        #[inline(always)]
-        pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let mut elem_count = len.size();
-            let (elems_left_row, elems_left_row_back_idx);
-            let mut end = len.clone();
-            (0..len.ndim()).for_each(|i| unsafe {
-                *end.slice_mut().get_unchecked_mut(i) =
-                    len.slice().get_unchecked(i).wrapping_sub(1);
-            });
-            if elem_count > len.last_elem() {
-                //elem_count is multiple of len.last_elem()
-                elem_count -= 2 * len.last_elem();
-                elems_left_row = [len.last_elem(); 2];
-                elems_left_row_back_idx = 1;
-            } else {
-                elems_left_row = [elem_count, 0];
-                elems_left_row_back_idx = 0;
-                elem_count = 0;
-            }
-            let offset_back = D::stride_offset(&end, &strides);
-            BaseIterNdIdx {
-                ptr,
-                index: D::zeros(len.ndim()),
-                dim: len,
-                strides,
-                end,
-                elems_left: elem_count,
-                elems_left_row,
-                elems_left_row_back_idx,
-                offset_front: 0,
-                offset_back,
-                inner,
-                _item: PhantomData,
-            }
-        }
 
-        /// Splits the iterator at `index`, yielding two disjoint iterators.
-        ///
-        /// `index` is relative to the current state of the iterator (which is not
-        /// necessarily the start of the axis).
-        ///
-        /// **Panics** if `index` is strictly greater than the iterator's remaining
-        /// length.
-        #[inline(always)]
-        pub(crate) fn split_at(
-            self,
-            index: usize,
-        ) -> (Self,Self) {
-            assert!(index <= self.len());
-            let mut mid = self.index.clone();
-            self.dim.jump_index_by_unchecked(&mut mid, index);
-            let mut end1 = mid.clone();
-            self.dim.jump_index_back_unchecked(&mut end1);
-            let (offset_back, offset_front) = (
-                D::stride_offset(&end1, &self.strides),
-                D::stride_offset(&mid, &self.strides),
-            );
-            let right_elems_left = self.len() - index;
-            let left = BaseIterNdIdx {
-                index: self.index,
-                dim: self.dim.clone(),
-                strides: self.strides.clone(),
-                ptr: self.ptr,
-                end: end1,
-                elems_left: index,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
-                offset_front: self.offset_front,
-                offset_back,
-                inner: self.inner.clone(),
-                _item: self._item,
-            }
-            .elems_left_row_calc();
-            let right = BaseIterNdIdx {
-                index: mid,
-                dim: self.dim,
-                strides: self.strides,
-                ptr: self.ptr,
-                end: self.end,
-                elems_left: right_elems_left,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
-                offset_front,
-                offset_back: self.offset_back,
-                inner: self.inner,
-                _item: self._item,
-            }
-            .elems_left_row_calc();
-            (left,right)
-        }
-    }
-
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Iterator
-        for BaseIterNdIdx<A, D, IDX, IdxA>
-    {
-        type Item = IdxA::BIItem;
-
-        #[inline(always)]
-        fn next(&mut self) -> Option<Self::Item> {
-            let stride = (self.strides.last_elem() as Ixs) as isize;
-            BaseIterNdNext!(
-                self,
-                stride,
-                index,
-                last_wrapping_add,
-                jump_h_index_unchecked,
-                0,
-                0,
-                true,
-                offset_front,
-                stride_h_offset
-            )
-        }
-        #[inline(always)]
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            let len = self.len();
-            (len, Some(len))
-        }
-
-        #[inline(always)]
-        fn fold<Acc, G>(mut self, init: Acc, mut g: G) -> Acc
-        where
-            G: FnMut(Acc, Self::Item) -> Acc,
-        {
-            let stride = self.strides.last_elem() as isize;
-            let mut accum = init;
-            BaseIterNdFoldNStd!(
-                self,
-                accum,
-                g,
-                stride,
-                index,
-                last_wrapping_add,
-                jump_h_index_unchecked,
-                0,
-                {},
-                offset_front,
-                stride_h_offset
-            );
-            accum
-        }
-    }
-
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> DoubleEndedIterator
-        for BaseIterNdIdx<A, D, IDX, IdxA>
-    {
-        #[inline(always)]
-        fn next_back(&mut self) -> Option<Self::Item> {
-            let stride = -(self.strides.last_elem() as Ixs) as isize;
-            BaseIterNdNext!(
-                self,
-                stride,
-                end,
-                last_wrapping_sub,
-                jump_h_index_back_unchecked,
-                self.dim.last_elem() - 1,
-                self.elems_left_row_back_idx,
-                false,
-                offset_back,
-                stride_offset
-            )
-        }
-
-        #[inline(always)]
-        fn rfold<Acc, G>(mut self, init: Acc, mut g: G) -> Acc
-        where
-            G: FnMut(Acc, Self::Item) -> Acc,
-        {
-            let stride = -(self.strides.last_elem() as isize);
-            let mut accum = init;
-            BaseIterNdFoldNStd!(
-                self,
-                accum,
-                g,
-                stride,
-                end,
-                last_wrapping_sub,
-                jump_h_index_back_unchecked,
-                self.dim.last_elem() - 1,
-                {
-                    self.elems_left_row[0] = self.elems_left_row[self.elems_left_row_back_idx];
-                },
-                offset_back,
-                stride_offset
-            );
-            accum
-        }
-    }
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> ExactSizeIterator
-        for BaseIterNdIdx<A, D, IDX, IdxA>
-    {
-        #[inline(always)]
-        fn len(&self) -> usize {
-            self.elems_left + self.elems_left_row[0] + self.elems_left_row[1]
-        }
-    }
-    clone_bounds!(
-        [A, D: Clone+Dimension, const IDX:bool, IdxA: BIItemT<A, D,IDX>]
-        BaseIterNdIdx[A, D, IDX, IdxA] {
-            @copy {
-                ptr,
-            }
-            dim,
-            strides,
-            end,
-            elems_left,
-            index,
-            elems_left_row,
-            elems_left_row_back_idx,
-            offset_front,
-            offset_back,
-            inner,
-            _item,
-        }
-    );
-}
-//=================================================================================================
 mod base_iter {
     use super::*;
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Clone
@@ -1211,13 +969,7 @@ mod base_iter {
             match D::NDIM {
                 Some(0) => Self::D0(BaseIter0d::new(ptr, inner)),
                 Some(1) => Self::D1(BaseIter1d::new(ptr, len, strides, inner)),
-                _ => {
-                    if IdxA::REQUIRES_IDX {
-                        Self::DnIdx(BaseIterNdIdx::new(ptr, len, strides, inner))
-                    } else {
-                        Self::Dn(BaseIterNd::new(ptr, len, strides, inner))
-                    }
-                }
+                _ => Self::Dn(BaseIterNd::new(ptr, len, strides, inner)),
             }
         }
 
@@ -1232,21 +984,16 @@ mod base_iter {
         pub fn split_at(self, index: usize) -> (Self, Self) {
             match D::NDIM {
                 Some(0) => {
-                    let ret=unwrapBI!(self,D0,inner => inner.split_at(index));
-                    (Self::D0(ret.0),Self::D0(ret.1))
+                    let ret = unwrapBI!(self,D0,inner => inner.split_at(index));
+                    (Self::D0(ret.0), Self::D0(ret.1))
                 }
                 Some(1) => {
-                    let ret=unwrapBI!(self,D1,inner => inner.split_at(index));
-                    (Self::D1(ret.0),Self::D1(ret.1))
+                    let ret = unwrapBI!(self,D1,inner => inner.split_at(index));
+                    (Self::D1(ret.0), Self::D1(ret.1))
                 }
                 _ => {
-                    if IdxA::REQUIRES_IDX {
-                        let ret=unwrapBI!(self,DnIdx,inner => inner.split_at(index));
-                        (Self::DnIdx(ret.0),Self::DnIdx(ret.1))
-                    } else {
-                        let ret=unwrapBI!(self,Dn,inner => inner.split_at(index));
-                        (Self::Dn(ret.0),Self::Dn(ret.1))
-                    }
+                    let ret = unwrapBI!(self,Dn,inner => inner.split_at(index));
+                    (Self::Dn(ret.0), Self::Dn(ret.1))
                 }
             }
         }
@@ -1351,10 +1098,10 @@ impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, 
     }
 
     unsafe fn as_ref(&self, ptr: Self::Ptr) -> Self::Item {
-        IdxA::item(
-            &unwrapBI!(self, D1).inner,
+        IdxA!(
+            unwrapBI!(self, D1).inner,
             unwrapBI!(self, D1).index.clone(),
-            ptr,
+            ptr
         )
     }
 
@@ -1520,8 +1267,10 @@ unsafe impl<F> TrustedIterator for Linspace<F> {}
 unsafe impl<F> TrustedIterator for Geomspace<F> {}
 #[cfg(feature = "std")]
 unsafe impl<F> TrustedIterator for Logspace<F> {}
-unsafe impl<'a, A, D: Dimension> TrustedIterator for Iter<'a, A, D> {}
-unsafe impl<'a, A, D: Dimension> TrustedIterator for IterMut<'a, A, D> {}
+unsafe impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> TrustedIterator
+    for BaseIter<A, D, IDX, IdxA>
+{
+}
 unsafe impl<I> TrustedIterator for std::iter::Cloned<I> where I: TrustedIterator {}
 unsafe impl<I, F> TrustedIterator for std::iter::Map<I, F> where I: TrustedIterator {}
 unsafe impl<'a, A> TrustedIterator for slice::Iter<'a, A> {}
