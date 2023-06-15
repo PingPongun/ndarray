@@ -730,7 +730,7 @@ mod base_iter_nd {
             let (standard_layout, mut elem_count, len, strides) = if IdxA::REQUIRES_IDX {
                 (false, len.size(), len, strides)
             } else {
-                len.dim_stride_analysis(&strides)
+                len.dim_stride_analysis(strides)
             };
             let (elems_left_row, elems_left_row_back_idx);
             let mut end = len.clone();
