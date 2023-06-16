@@ -1939,7 +1939,7 @@ where
             };
             Ok(CowArray::from(Array::from_shape_trusted_iter_unchecked(
                 shape,
-                view.into_iter::<false, BIItemRef<A>>(),
+                view.into_iter::<false, true, BIItemRef<A>>(),
                 A::clone,
             )))
         }
@@ -2551,13 +2551,12 @@ where
         A: 'a,
         S: Data,
     {
-        if let Some(slc) = self.as_slice_memory_order() {
-            slc.iter().fold(init, f)
-        } else {
-            let mut v = self.view();
-            move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-            v.into_iter::<false, BIItemRef<A>>().fold(init, f)
+        let mut v = self.view();
+        if v.strides.last_elem() != 1
+        {
+                move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
         }
+        v.into_iter::<false, true, BIItemRef<A>>().fold(init, f)
     }
 
     /// Call `f` by reference on each element and create a new array
@@ -2709,14 +2708,13 @@ where
         A: 'a,
         F: FnMut(&'a mut A),
     {
-        match self.try_as_slice_memory_order_mut() {
-            Ok(slc) => slc.iter_mut().for_each(f),
-            Err(arr) => {
-                let mut v = arr.view_mut();
+        let mut v = self.view_mut();
+        if v.strides.last_elem() != 1
+        {
                 move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-                v.into_iter::<false, BIItemRefMut<A>>().for_each(f);
-            }
         }
+        v.into_iter::<false, true, BIItemRefMut<A>>().for_each(f);
+        
     }
 
     /// Modify the array in place by calling `f` by **v**alue on each element.

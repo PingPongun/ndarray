@@ -62,20 +62,34 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     inner: IdxA::Inner,
     _item: PhantomData<IdxA>,
 }
-
+/// BaseIterNdSINGLE_ENDED_FOLDING- BaseIterNd optimized for single ended use (does not implement DoubleEndedIterator & ParallelIter)
+/// intended mostly for simple use cases as array.iter().fold(...), array.iter.sum(), ..
+/// iterating with next() may be less performant than with BaseIterNd, but fold() based function are faster (mostly thanks to faster creation time) (especially for small arrays & IxDyn)
+pub struct BaseIterNdSEF<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+    ptr: *mut A,
+    dim: D,
+    strides: D,
+    elems_left: usize,
+    index: D,
+    standard_layout: bool,
+    offset_front: isize,
+    inner: IdxA::Inner,
+    _item: PhantomData<IdxA>,
+}
 /// Base for iterators over all axes.
 ///
 /// Iterator element type is `*mut A`.
 /// index and end values are only valid indices when elements_left >= 1
-pub enum BaseIter<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+pub enum BaseIter<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> {
     D0(BaseIter0d<A, D, IDX, IdxA>),
     D1(BaseIter1d<A, D, IDX, IdxA>),
     Dn(BaseIterNd<A, D, IDX, IdxA>),
+    DnSEF(BaseIterNdSEF<A, D, IDX, IdxA>),
 }
 #[macro_use]
 pub(crate) mod _macros {
     macro_rules! eitherBI {
-        ($bi:expr, $inner:pat => $result:expr) => {
+        ($bi:expr, $SEF:expr, $SEF_expr:expr, $inner:pat => $result:expr) => {
             match D::NDIM {
                 Some(0) => {
                     unwrapBI!($bi,D0,$inner=>$result)
@@ -84,14 +98,24 @@ pub(crate) mod _macros {
                     unwrapBI!($bi,D1,$inner=>$result)
                 }
                 _ => {
-                    unwrapBI!($bi,Dn,$inner=>$result)
+                    if $SEF {
+                        $SEF_expr
+                    } else {
+                        unwrapBI!($bi,Dn,$inner=>$result)
+                    }
                 }
             }
+        };
+        ($bi:expr, $inner:pat => $result:expr) => {
+            eitherBI!($bi, SEF, unwrapBI!($bi,DnSEF,$inner=>$result), $inner=>$result)
+        };
+        (nSEF,$bi:expr, $inner:pat => $result:expr) => {
+            eitherBI!($bi, false, unsafe{unreachable_unchecked()}, $inner=>$result)
         };
     }
 
     macro_rules! eitherBIwrapped {
-        ($bi:expr, $inner:pat => $result:expr) => {
+        ($bi:expr, $SEF:expr, $SEF_expr:expr, $inner:pat => $result:expr) => {
             match D::NDIM {
                 Some(0) => {
                     unwrapBI!($bi,D0,$inner=>BaseIter::D0($result))
@@ -100,9 +124,19 @@ pub(crate) mod _macros {
                     unwrapBI!($bi,D1,$inner=>BaseIter::D1($result))
                 }
                 _ => {
-                    unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))
+                    if $SEF {
+                        $SEF_expr
+                    } else {
+                        unwrapBI!($bi,Dn,$inner=>BaseIter::Dn($result))
+                    }
                 }
             }
+        };
+        ($bi:expr, $inner:pat => $result:expr) => {
+            eitherBIwrapped!($bi, SEF, unwrapBI!($bi,DnSEF,$inner=>BaseIter::DnSEF($result)), $inner=>$result)
+        };
+        (nSEF,$bi:expr, $inner:pat => $result:expr) => {
+            eitherBIwrapped!($bi, false,  unsafe{unreachable_unchecked()}, $inner=>$result)
         };
     }
     macro_rules! ifIdx {
@@ -959,35 +993,214 @@ mod base_iter_nd {
         }
     );
 }
+//====================================================================================
+
+mod base_iter_nd_sef {
+    use super::*;
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIterNdSEF<A, D, IDX, IdxA> {
+        /// Creating a Baseiter is unsafe because shape and stride parameters need
+        /// to be correct to avoid performing an unsafe pointer offset while
+        /// iterating.
+        #[inline(always)]
+        pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
+            let elem_count = len.size();
+            let standard_layout = len.is_layout_c_unchecked(&strides);
+            BaseIterNdSEF {
+                ptr,
+                index: D::zeros(len.ndim()),
+                dim: len,
+                strides,
+                elems_left: elem_count,
+                standard_layout,
+                offset_front: 0,
+                inner,
+                _item: PhantomData,
+            }
+        }
+    }
+
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Iterator
+        for BaseIterNdSEF<A, D, IDX, IdxA>
+    {
+        type Item = IdxA::BIItem;
+
+        #[inline(always)]
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.dim.ndim() == 0 {
+                if self.elems_left != 0 {
+                    self.elems_left = 0;
+                    Some(IdxA!(&self.inner, self.index.clone(), self.ptr))
+                } else {
+                    None
+                }
+            } else {
+                let stride = (self.strides.last_elem() as Ixs) as isize;
+                if self.dim.last_elem() == self.index.last_elem() {
+                    if self.elems_left == 0 {
+                        None
+                    } else {
+                        //switch to new row
+                        self.index.set_last_elem(0);
+                        self.dim.jump_h_index_unchecked(&mut self.index);
+                        self.offset_front = D::stride_h_offset(&self.index, &self.strides);
+                        self.elems_left -= 1;
+                        //return first from new row
+                        let index = self.index.clone();
+                        let ret = unsafe { self.ptr.offset(self.offset_front) };
+                        self.offset_front += stride;
+                        self.index.last_wrapping_add(1);
+                        Some(IdxA!(&self.inner, index, ret))
+                    }
+                } else {
+                    self.elems_left -= 1;
+                    let index = self.index.clone();
+                    let ret = unsafe { self.ptr.offset(self.offset_front) };
+                    self.offset_front += stride;
+                    self.index.last_wrapping_add(1);
+                    Some(IdxA!(&self.inner, index, ret))
+                }
+            }
+        }
+        #[inline(always)]
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            let len = self.len();
+            (len, Some(len))
+        }
+
+        #[inline(always)]
+        fn fold<Acc, G>(mut self, init: Acc, mut g: G) -> Acc
+        where
+            G: FnMut(Acc, Self::Item) -> Acc,
+        {
+            let stride = self.strides.last_elem() as isize;
+            let mut accum = init;
+            if self.standard_layout {
+                accum = unsafe {
+                    core::slice::from_raw_parts_mut(self.ptr.offset(self.offset_front), self.len())
+                }
+                .iter_mut()
+                .fold(accum, |acc, ptr| {
+                    g(acc, IdxA!(&self.inner, self.index.clone(), ptr))
+                });
+                self.elems_left = 0;
+            } else {
+                if self.dim.ndim() == 0 {
+                    if self.len() != 0 {
+                        self.elems_left = 0;
+                        unsafe {
+                            accum = g(
+                                accum,
+                                IdxA!(
+                                    &self.inner,
+                                    self.index.clone(),
+                                    self.ptr.offset(self.offset_front)
+                                ),
+                            );
+                        }
+                    }
+                } else {
+                    self.elems_left -= self.dim.last_elem() - self.index.last_elem();
+                    while self.dim.last_elem() != self.index.last_elem() {
+                        unsafe {
+                            accum = g(
+                                accum,
+                                IdxA!(
+                                    &self.inner,
+                                    self.index.clone(),
+                                    self.ptr.offset(self.offset_front)
+                                ),
+                            );
+                        }
+                        self.offset_front += stride;
+                        self.index.last_wrapping_add(1);
+                    }
+                    self.dim.jump_h_index_unchecked(&mut self.index);
+                    self.offset_front = D::stride_h_offset(&self.index, &self.strides);
+                    self.index.set_last_elem(0);
+                    while self.elems_left != 0 {
+                        self.elems_left -= self.dim.last_elem();
+                        while self.dim.last_elem() != self.index.last_elem() {
+                            unsafe {
+                                accum = g(
+                                    accum,
+                                    IdxA!(
+                                        &self.inner,
+                                        self.index.clone(),
+                                        self.ptr.offset(self.offset_front)
+                                    ),
+                                );
+                            }
+                            self.offset_front += stride;
+                            self.index.last_wrapping_add(1);
+                        }
+                        self.dim.jump_h_index_unchecked(&mut self.index);
+                        self.offset_front = D::stride_h_offset(&self.index, &self.strides);
+                        self.index.set_last_elem(0);
+                    }
+                };
+            }
+            return accum;
+        }
+    }
+
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> ExactSizeIterator
+        for BaseIterNdSEF<A, D, IDX, IdxA>
+    {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.elems_left //+self.elems_left_row//+ self.dim.last_elem() - self.index.last_elem()
+        }
+    }
+    clone_bounds!(
+        [A, D: Clone+Dimension, const IDX:bool, IdxA: BIItemT<A, D,IDX>]
+        BaseIterNdSEF[A, D, IDX, IdxA] {
+            @copy {
+                ptr,
+            }
+            dim,
+            strides,
+            elems_left,
+            index,
+            standard_layout,
+            offset_front,
+            inner,
+            _item,
+        }
+    );
+}
 //=================================================================================================
 
 mod base_iter {
     use super::*;
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Clone
-        for BaseIter<A, D, IDX, IdxA>
+    impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Clone
+        for BaseIter<A, D, IDX, SEF, IdxA>
     {
         fn clone(&self) -> Self {
             eitherBIwrapped!(self,inner => inner.clone())
         }
     }
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIter<A, D, IDX, IdxA> {
+    impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>>
+        BaseIter<A, D, IDX, SEF, IdxA>
+    {
         /// Creating a Baseiter is unsafe because shape and stride parameters need
         /// to be correct to avoid performing an unsafe pointer offset while
         /// iterating.
         #[inline(always)]
-        pub unsafe fn new(
-            ptr: *mut A,
-            len: D,
-            strides: D,
-            inner: IdxA::Inner,
-        ) -> BaseIter<A, D, IDX, IdxA> {
+        pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
             match D::NDIM {
                 Some(0) => Self::D0(BaseIter0d::new(ptr, inner)),
                 Some(1) => Self::D1(BaseIter1d::new(ptr, len, strides, inner)),
-                _ => Self::Dn(BaseIterNd::new(ptr, len, strides, inner)),
+                _ => {
+                    if SEF {
+                        Self::DnSEF(BaseIterNdSEF::new(ptr, len, strides, inner))
+                    } else {
+                        Self::Dn(BaseIterNd::new(ptr, len, strides, inner))
+                    }
+                }
             }
         }
-
+    }
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIter<A, D, IDX, false, IdxA> {
         /// Splits the iterator at `index`, yielding two disjoint iterators.
         ///
         /// `index` is relative to the current state of the iterator (which is not
@@ -1014,8 +1227,8 @@ mod base_iter {
         }
     }
 
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Iterator
-        for BaseIter<A, D, IDX, IdxA>
+    impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Iterator
+        for BaseIter<A, D, IDX, SEF, IdxA>
     {
         type Item = IdxA::BIItem;
 
@@ -1042,26 +1255,26 @@ mod base_iter {
     }
 
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> DoubleEndedIterator
-        for BaseIter<A, D, IDX, IdxA>
+        for BaseIter<A, D, IDX, false, IdxA>
     {
         #[inline(always)]
         fn next_back(&mut self) -> Option<Self::Item> {
-            eitherBI!(self,inner=>inner.next_back())
+            eitherBI!(nSEF, self,inner=>inner.next_back())
         }
         #[inline(always)]
         fn nth_back(&mut self, count: usize) -> Option<Self::Item> {
-            eitherBI!(self,inner=>inner.nth_back(count))
+            eitherBI!(nSEF, self,inner=>inner.nth_back(count))
         }
         #[inline]
         fn rfold<Acc, G>(self, init: Acc, g: G) -> Acc
         where
             G: FnMut(Acc, Self::Item) -> Acc,
         {
-            eitherBI!(self,inner=>inner.rfold(init,g))
+            eitherBI!(nSEF, self,inner=>inner.rfold(init,g))
         }
     }
-    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> ExactSizeIterator
-        for BaseIter<A, D, IDX, IdxA>
+    impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>>
+        ExactSizeIterator for BaseIter<A, D, IDX, SEF, IdxA>
     {
         #[inline(always)]
         fn len(&self) -> usize {
@@ -1081,7 +1294,9 @@ mod base_iter {
     //     }
     // }
 }
-impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, Ix1, IDX, IdxA> {
+impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer
+    for BaseIter<A, Ix1, IDX, false, IdxA>
+{
     type Item = <Self as Iterator>::Item;
     type Dim = Ix1;
     type Ptr = *mut A;
@@ -1138,61 +1353,61 @@ impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer for BaseIter<A, 
 //=================================================================================================
 pub use base_iter::*;
 
-pub type PtrIter<A, D> = BaseIter<A, D, false, BIItemPtr<A>>;
+pub type PtrIter<A, D> = BaseIter<A, D, false, false, BIItemPtr<A>>;
 /// An iterator over the elements of an array.
 ///
 /// Iterator element type is `&'a A`.
 ///
 /// See [`.iter()`](ArrayBase::iter) for more information.
-pub type Iter<'a, A, D> = BaseIter<A, D, false, BIItemRef<'a, A>>;
+pub type Iter<'a, A, D> = BaseIter<A, D, false, false, BIItemRef<'a, A>>;
 
 /// An iterator over the elements of an array (mutable).
 ///
 /// Iterator element type is `&'a mut A`.
 ///
 /// See [`.iter_mut()`](ArrayBase::iter_mut) for more information.
-pub type IterMut<'a, A, D> = BaseIter<A, D, false, BIItemRefMut<'a, A>>;
+pub type IterMut<'a, A, D> = BaseIter<A, D, false, false, BIItemRefMut<'a, A>>;
 
 /// An iterator over the indexes and elements of an array.
 ///
 /// See [`.indexed_iter()`](ArrayBase::indexed_iter) for more information.
-pub type IndexedIter<'a, A, D> = BaseIter<A, D, true, BIItemRef<'a, A>>;
+pub type IndexedIter<'a, A, D> = BaseIter<A, D, true, false, BIItemRef<'a, A>>;
 
 /// An iterator over the indexes and elements of an array (mutable).
 ///
 /// See [`.indexed_iter_mut()`](ArrayBase::indexed_iter_mut) for more information.
-pub type IndexedIterMut<'a, A, D> = BaseIter<A, D, true, BIItemRefMut<'a, A>>;
+pub type IndexedIterMut<'a, A, D> = BaseIter<A, D, true, false, BIItemRefMut<'a, A>>;
 
 /// An iterator that traverses over all axes but one, and yields a view for
 /// each lane along that axis.
 ///
 /// See [`.lanes()`](ArrayBase::lanes) for more information.
-pub type LanesIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, Ix1>>;
+pub type LanesIter<'a, A, D> = BaseIter<A, D, false, false, BIItemArrayView<'a, A, Ix1>>;
 
 /// An iterator that traverses over all dimensions but the innermost,
 /// and yields each inner row (mutable).
 ///
 /// See [`.lanes_mut()`](ArrayBase::lanes_mut)
 /// for more information.
-pub type LanesIterMut<'a, A, D> = BaseIter<A, D, false, BIItemArrayViewMut<'a, A, Ix1>>;
+pub type LanesIterMut<'a, A, D> = BaseIter<A, D, false, false, BIItemArrayViewMut<'a, A, Ix1>>;
 
 /// Exact chunks iterator.
 ///
 /// See [`.exact_chunks()`](ArrayBase::exact_chunks) for more
 /// information.
-pub type ExactChunksIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, D>>;
+pub type ExactChunksIter<'a, A, D> = BaseIter<A, D, false, false, BIItemArrayView<'a, A, D>>;
 
 /// Exact chunks iterator.
 ///
 /// See [`.exact_chunks_mut()`](ArrayBase::exact_chunks_mut)
 /// for more information.
-pub type ExactChunksIterMut<'a, A, D> = BaseIter<A, D, false, BIItemArrayViewMut<'a, A, D>>;
+pub type ExactChunksIterMut<'a, A, D> = BaseIter<A, D, false, false, BIItemArrayViewMut<'a, A, D>>;
 
 /// Window iterator.
 ///
 /// See [`.windows()`](ArrayBase::windows) for more
 /// information.
-pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, D>>;
+pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, false, BIItemArrayView<'a, A, D>>;
 
 /// An iterator that traverses over an axis and
 /// and yields each subview.
@@ -1208,7 +1423,7 @@ pub type WindowsIter<'a, A, D> = BaseIter<A, D, false, BIItemArrayView<'a, A, D>
 /// See [`.outer_iter()`](ArrayBase::outer_iter)
 /// or [`.axis_iter()`](ArrayBase::axis_iter)
 /// for more information.
-pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayView<'a, A, DI>>;
+pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, false, BIItemArrayView<'a, A, DI>>;
 
 /// An iterator that traverses over an axis and
 /// and yields each subview (mutable)
@@ -1224,7 +1439,7 @@ pub type AxisIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayView<'a, A, DI
 /// See [`.outer_iter_mut()`](ArrayBase::outer_iter_mut)
 /// or [`.axis_iter_mut()`](ArrayBase::axis_iter_mut)
 /// for more information.
-pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayViewMut<'a, A, DI>>;
+pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, false, BIItemArrayViewMut<'a, A, DI>>;
 
 /// An iterator that traverses over the specified axis
 /// and yields views of the specified size on this axis.
@@ -1236,7 +1451,8 @@ pub type AxisIterMut<'a, A, DI> = BaseIter<A, Ix1, false, BIItemArrayViewMut<'a,
 /// Iterator element type is `ArrayView<'a, A, D>`.
 ///
 /// See [`.axis_chunks_iter()`](ArrayBase::axis_chunks_iter) for more information.
-pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemVariableArrayView<'a, A, DI>>;
+pub type AxisChunksIter<'a, A, DI> =
+    BaseIter<A, Ix1, false, false, BIItemVariableArrayView<'a, A, DI>>;
 
 /// An iterator that traverses over the specified axis
 /// and yields mutable views of the specified size on this axis.
@@ -1250,7 +1466,7 @@ pub type AxisChunksIter<'a, A, DI> = BaseIter<A, Ix1, false, BIItemVariableArray
 /// See [`.axis_chunks_iter_mut()`](ArrayBase::axis_chunks_iter_mut)
 /// for more information.
 pub type AxisChunksIterMut<'a, A, DI> =
-    BaseIter<A, Ix1, false, BIItemVariableArrayViewMut<'a, A, DI>>;
+    BaseIter<A, Ix1, false, false, BIItemVariableArrayViewMut<'a, A, DI>>;
 
 //=================================================================================================
 
@@ -1282,8 +1498,8 @@ unsafe impl<F> TrustedIterator for Linspace<F> {}
 unsafe impl<F> TrustedIterator for Geomspace<F> {}
 #[cfg(feature = "std")]
 unsafe impl<F> TrustedIterator for Logspace<F> {}
-unsafe impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> TrustedIterator
-    for BaseIter<A, D, IDX, IdxA>
+unsafe impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>>
+    TrustedIterator for BaseIter<A, D, IDX, SEF, IdxA>
 {
 }
 unsafe impl<I> TrustedIterator for std::iter::Cloned<I> where I: TrustedIterator {}

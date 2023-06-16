@@ -190,7 +190,7 @@ where
     D: Dimension,
 {
     #[inline]
-    pub(crate) fn into_iter<const IDX:bool,IdxA: BIItemT<A, D, IDX,Inner = () >>(self) -> BaseIter<A, D,IDX, IdxA> {
+    pub(crate) fn into_iter<const IDX:bool, const SEF:bool, IdxA: BIItemT<A, D, IDX,Inner = () >>(self) -> BaseIter<A, D,IDX, SEF,IdxA> {
         unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
     }
 
@@ -228,7 +228,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_iter<const IDX:bool,IdxA: BIItemT<A, D, IDX ,Inner = ()>>(self) -> BaseIter<A, D,IDX, IdxA> {
+    pub(crate) fn into_iter<const IDX:bool, const SEF:bool, IdxA: BIItemT<A, D, IDX ,Inner = ()>>(self) -> BaseIter<A, D, IDX, SEF, IdxA> {
         unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
     }
 

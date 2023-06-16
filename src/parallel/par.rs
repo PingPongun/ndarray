@@ -37,7 +37,7 @@ macro_rules! BI_par_iter_wrapper {
     // thread_bounds are either Sync or Send + Sync
     ([$($generics:tt)*], $item:ty,$idx:expr, [$($thread_bounds:tt)*], [$($add_bounds:tt)*]) => {
     /// Requires crate feature `rayon`.
-    impl<'a, A, D,$($generics)*> IntoParallelIterator for BaseIter<A, D, $idx, $item>
+    impl<'a, A, D,$($generics)*> IntoParallelIterator for BaseIter<A, D, $idx, false, $item>
     where D: Dimension,
         A: $($thread_bounds)*,
         $($add_bounds)*
@@ -51,12 +51,12 @@ macro_rules! BI_par_iter_wrapper {
             }
         }
     }
-    impl<'a, A, D,$($generics)*> ParallelIterator for Parallel<BaseIter<A, D, $idx, $item>>
+    impl<'a, A, D,$($generics)*> ParallelIterator for Parallel<BaseIter<A, D, $idx, false, $item>>
     where D: Dimension,
         A: $($thread_bounds)*,
         $($add_bounds)*
     {
-        type Item = <BaseIter<A, D, $idx, $item> as Iterator>::Item;
+        type Item = <BaseIter<A, D, $idx, false, $item> as Iterator>::Item;
         fn drive_unindexed<C>(self, consumer: C) -> C::Result
             where C: UnindexedConsumer<Self::Item>
         {
@@ -69,7 +69,7 @@ macro_rules! BI_par_iter_wrapper {
     }
 
 
-    impl<'a, A, D,$($generics)*> IndexedParallelIterator for Parallel<BaseIter<A, D, $idx, $item>>
+    impl<'a, A, D,$($generics)*> IndexedParallelIterator for Parallel<BaseIter<A, D, $idx, false, $item>>
     where D: Dimension,
         A: $($thread_bounds)*,
         $($add_bounds)*
@@ -91,12 +91,12 @@ macro_rules! BI_par_iter_wrapper {
         }
     }
 
-        impl<'a, A, D,$($generics)*> IntoIterator for ParallelProducer<BaseIter<A, D, $idx, $item>>
+        impl<'a, A, D,$($generics)*> IntoIterator for ParallelProducer<BaseIter<A, D, $idx, false, $item>>
         where D: Dimension,
             A: $($thread_bounds)*,
             $($add_bounds)*
     {
-        type IntoIter = BaseIter<A, D, $idx, $item>;
+        type IntoIter = BaseIter<A, D, $idx, false, $item>;
         type Item = <Self::IntoIter as Iterator>::Item;
 
         fn into_iter(self) -> Self::IntoIter {
@@ -105,12 +105,12 @@ macro_rules! BI_par_iter_wrapper {
     }
 
     // This is the real magic, I guess
-    impl<'a, A, D,$($generics)*> Producer for ParallelProducer<BaseIter<A, D, $idx, $item>>
+    impl<'a, A, D,$($generics)*> Producer for ParallelProducer<BaseIter<A, D, $idx, false, $item>>
     where D: Dimension,
         A: $($thread_bounds)*,
         $($add_bounds)*
     {
-        type IntoIter = BaseIter<A, D, $idx, $item>;
+        type IntoIter = BaseIter<A, D, $idx, false, $item>;
         type Item = <Self::IntoIter as Iterator>::Item;
 
         fn into_iter(self) -> Self::IntoIter {

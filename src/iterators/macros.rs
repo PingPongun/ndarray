@@ -37,15 +37,15 @@ macro_rules! send_sync_read_write {
     };
 }
 
-macro_rules! send_sync_bi_array_view {
-    ($name:ident,$A_trait:ident,$idx:expr) => {
-        unsafe impl<'a, A, D: Dimension, DI: Dimension> Send for BaseIter<A, D, $idx, $name<'a, A, DI>>
+macro_rules! send_sync_bi_array_view {    
+    ($name:ident,$A_trait:ident,$idx:expr,$simple:expr) => {
+    unsafe impl<'a, A, D: Dimension, DI: Dimension> Send for BaseIter<A, D, $idx, $simple, $name<'a, A, DI>>
         where
             A: $A_trait,
             D: Send,
         {
         }
-        unsafe impl<'a, A, D: Dimension, DI: Dimension> Sync for BaseIter<A, D, $idx, $name<'a, A, DI>>
+        unsafe impl<'a, A, D: Dimension, DI: Dimension> Sync for BaseIter<A, D, $idx, $simple, $name<'a, A, DI>>
         where
             A: Sync,
             D: Sync,
@@ -53,8 +53,10 @@ macro_rules! send_sync_bi_array_view {
         }
     };
     ($name:ident,$A_trait:ident) => {
-        send_sync_bi_array_view!($name,$A_trait,false);
-        send_sync_bi_array_view!($name,$A_trait,true);
+        send_sync_bi_array_view!($name,$A_trait,false,false);
+        send_sync_bi_array_view!($name,$A_trait,false,true);
+        send_sync_bi_array_view!($name,$A_trait,true,false);
+        send_sync_bi_array_view!($name,$A_trait,true,true);
     };
 }
 
