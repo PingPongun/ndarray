@@ -1004,7 +1004,11 @@ mod base_iter_nd_sef {
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
             let elem_count = len.size();
-            let standard_layout = len.is_layout_c_unchecked(&strides);
+            let standard_layout = if IdxA::REQUIRES_IDX {
+                false
+            } else {
+                len.is_layout_c_unchecked(&strides)
+            };
             BaseIterNdSEF {
                 ptr,
                 index: D::zeros(len.ndim()),

@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use core::hint::unreachable_unchecked;
 use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 use std::ops::{Index, IndexMut};
@@ -289,60 +288,72 @@ pub trait Dimension:
     #[inline(always)]
     fn is_layout_c_unchecked(&self, strides: &Self) -> bool {
         let mut contig_stride = 1;
-        let mut nret = true;
-        let mut i = self.ndim();
-        let mut dim_stride = self.slice().iter().rev().zip(strides.slice().iter().rev());
-        while nret && i != 0 {
-            i -= 1;
-            let (&dim, &s) = unsafe { dim_stride.next().unwrap_unchecked() };
-            nret &= s == contig_stride;
-            nret |= dim == 1;
-            contig_stride *= dim;
-        }
-        nret
+        let mut contig = true;
+        (0..self.ndim()).rev().for_each(|j| unsafe {
+            let dim = self.slice().get_unchecked(j);
+            let stride = strides.slice().get_unchecked(j);
+            let cs = *stride as isize == contig_stride || *dim == 1;
+            contig_stride *= *dim as isize;
+            contig &= cs;
+        });
+        contig
     }
     /// # Returns
     /// (is_layout_c, elements_count, dim, strides)
     #[inline(always)]
     fn dim_stride_analysis(mut self, mut strides: Self) -> (bool, usize, Self, Self) {
         if self.ndim() < 3 {
-            match self.ndim() {
-                0 => (false, 1, self, strides),
-
-                1 => (self[0] == 1 || strides[0] == 1, self[0], self, strides),
-                2 => {
-                    let ss0 = (self[0] == 1)
-                        || (strides[0] as isize == (self[1] as isize * strides[1] as isize));
-                    let elem_count = self[0] * self[1];
-                    let mut std_layout = false;
-                    if ss0 {
-                        //stride is contigous
-                        std_layout = strides[1] == 1 || (self[1] == 1 && strides[0] == 1);
-                        self[1] = elem_count;
-                        self[0] = 1;
-                    }
-                    (std_layout, elem_count, self, strides)
+            if self.ndim() < 2 {
+                if self.ndim() == 0 {
+                    (false, 1, self, strides)
+                } else {
+                    (self[0] == 1 || strides[0] == 1, self[0], self, strides)
                 }
-                _ => unsafe {
-                    unreachable_unchecked();
-                },
+            } else {
+                if self[1] == 1 {
+                    strides[1] = strides[0];
+                }
+                let elem_count = self[0] * self[1];
+                let ss0 = strides[0] as isize == (self[1] as isize * strides[1] as isize);
+                let mut std_layout = false;
+                if ss0 {
+                    //stride is contigous
+                    std_layout = strides[1] == 1;
+                    self[1] = elem_count;
+                    self[0] = 1;
+                }
+                (std_layout, elem_count, self, strides)
             }
         } else {
+            //"normalize" strides (if dim ==1 -> stride = stride of more significant axis)
+            let first_stride = unsafe { strides.slice().get_unchecked(0) }.clone();
+            (1..self.ndim()).fold(first_stride, |acc, j| unsafe {
+                let dim = self.slice().get_unchecked(j);
+                let stride = strides.slice_mut().get_unchecked_mut(j);
+                if *dim == 1 {
+                    *stride = acc;
+                }
+                *stride
+            });
+
+            //calculate element count & axis w contig stride count
             let mut len = self.last_elem();
             let mut contig_stride = strides.last_elem() as isize * self.last_elem() as isize;
-
             let mut contig = true;
             let contig_stride_axes = (0..self.ndim() - 1).rev().fold(0, |acc, j| unsafe {
                 let dim = self.slice().get_unchecked(j);
                 let stride = strides.slice().get_unchecked(j);
-                let cs = *stride as isize == contig_stride || *dim == 1;
+                let cs = *stride as isize == contig_stride;
                 contig_stride = *dim as isize * *stride as isize;
                 len *= dim;
                 contig &= cs;
                 acc + contig as usize
             });
+
             let fully_contigous = contig_stride_axes == self.ndim() - 1;
             let standard_layout = fully_contigous && strides.last_elem() == 1;
+
+            //if there are some axis with contig strides, colapse them
             if contig_stride_axes > 0 {
                 let axes2move = self.ndim() - contig_stride_axes - 1;
                 let last_dim_composite;
@@ -918,21 +929,6 @@ impl Dimension for Dim<[Ix; 2]> {
         true
     }
 
-    #[inline(always)]
-    fn dim_stride_analysis(mut self, strides: Self) -> (bool, usize, Self, Self) {
-        let ss0 =
-            (self[0] == 1) || (strides[0] as isize == (self[1] as isize * strides[1] as isize));
-        let elem_count = self[0] * self[1];
-        let mut std_layout = false;
-        if ss0 {
-            //stride is contigous
-            std_layout = strides[1] == 1 || (self[1] == 1 && strides[0] == 1);
-            self[1] = elem_count;
-            self[0] = 1;
-        }
-        (std_layout, elem_count, self, strides)
-    }
-
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
         let mut i = get!(&index, 0);
@@ -1222,31 +1218,31 @@ impl Dimension for Dim<[Ix; 3]> {
     }
 
     #[inline(always)]
-    fn dim_stride_analysis(self, strides: Self) -> (bool, usize, Self, Self) {
-        let ss1 = self[1] == 1 || strides[1] as isize == self[2] as isize * strides[2] as isize;
-        let ss0 = self[0] == 1
-            || strides[0] as isize == self[2] as isize * strides[2] as isize * self[1] as isize;
-        let mut dim = self.clone();
-        let mut new_strides = strides.clone();
+    fn dim_stride_analysis(mut self, mut strides: Self) -> (bool, usize, Self, Self) {
+        if self[1] == 1 {
+            strides[1] = strides[0];
+        }
+        if self[2] == 1 {
+            strides[2] = strides[1];
+        }
+        let ss1 = strides[1] as isize == self[2] as isize * strides[2] as isize;
+        let ss0 = strides[0] as isize == self[2] as isize * strides[2] as isize * self[1] as isize;
         let elem_count = self[0] * self[1] * self[2];
+        let mut std_layout = false;
         if ss1 {
             if ss0 {
-                dim[2] = elem_count;
-                dim[1] = 1;
-                dim[0] = 1;
+                std_layout = strides[1] == 1;
+                self[2] = elem_count;
+                self[1] = 1;
+                self[0] = 1;
             } else {
-                dim[2] = self[2] * self[1];
-                dim[1] = self[0];
-                dim[0] = 1;
-                new_strides[1] = strides[0];
+                self[2] = self[2] * self[1];
+                self[1] = self[0];
+                self[0] = 1;
+                strides[1] = strides[0];
             }
         }
-        (
-            self.is_layout_c_unchecked(&strides),
-            elem_count,
-            dim,
-            new_strides,
-        )
+        (std_layout, elem_count, self, strides)
     }
 
     #[inline]
