@@ -244,31 +244,58 @@ pub(crate) mod _macros {
     }
     macro_rules! BaseIterNdNext {
         ($_self:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr, $elems_idx:expr,$forward:ident,$offset:ident, $offset_func:ident) => {
-            if $_self.elems_left_row[$elems_idx] <= 1 {
-                //last element in row
-                if $_self.elems_left == 0 {
-                    //elems_left is multiple of self.dim.last_elem()
-                    //there are no "untouched" rows
-                    if $_self.elems_left_row_back_idx == 0 {
-                        //we are already in last row
-                        if $_self.elems_left_row[0] == 0 {
-                            None
+            if $_self.dim.ndim() == 0 {
+                if $_self.elems_left_row[0] != 0 {
+                    $_self.elems_left_row[0] = 0;
+                    unsafe {
+                        Some(IdxA!(
+                            $_self.inner,
+                            $_self.$idx.clone(),
+                            $_self.ptr.offset($_self.$offset)
+                        ))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                if $_self.elems_left_row[$elems_idx] <= 1 {
+                    //last element in row
+                    if $_self.elems_left == 0 {
+                        //elems_left is multiple of self.dim.last_elem()
+                        //there are no "untouched" rows
+                        if $_self.elems_left_row_back_idx == 0 {
+                            //we are already in last row
+                            if $_self.elems_left_row[0] == 0 {
+                                None
+                            } else {
+                                //last elem of last row
+                                $_self.elems_left_row[0] = 0;
+                                let index = $_self.$idx.clone();
+                                let ret = unsafe { $_self.ptr.offset($_self.$offset) };
+                                Some(IdxA!($_self.inner, index, ret))
+                            }
                         } else {
-                            //last elem of last row
-                            $_self.elems_left_row[0] = 0;
+                            //switching to last row
                             let index = $_self.$idx.clone();
                             let ret = unsafe { $_self.ptr.offset($_self.$offset) };
+                            if $forward {
+                                $_self.elems_left_row[0] = $_self.elems_left_row[1];
+                                $_self.elems_left_row[1] = 0;
+                            }
+                            $_self.elems_left_row_back_idx = 0;
+                            $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
+                            if IdxA::REQUIRES_IDX {
+                                $_self.$idx.set_last_elem($idx_def);
+                            }
+                            $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
                             Some(IdxA!($_self.inner, index, ret))
                         }
                     } else {
-                        //switching to last row
+                        //last element in each row
                         let index = $_self.$idx.clone();
                         let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                        if $forward {
-                            $_self.elems_left_row[0] = $_self.elems_left_row[1];
-                            $_self.elems_left_row[1] = 0;
-                        }
-                        $_self.elems_left_row_back_idx = 0;
+                        $_self.elems_left -= $_self.dim.last_elem();
+                        $_self.elems_left_row[$elems_idx] = $_self.dim.last_elem();
                         $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
                         if IdxA::REQUIRES_IDX {
                             $_self.$idx.set_last_elem($idx_def);
@@ -277,28 +304,16 @@ pub(crate) mod _macros {
                         Some(IdxA!($_self.inner, index, ret))
                     }
                 } else {
-                    //last element in each row
+                    //normal(not last in row) element
+                    $_self.elems_left_row[$elems_idx] -= 1;
                     let index = $_self.$idx.clone();
                     let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                    $_self.elems_left -= $_self.dim.last_elem();
-                    $_self.elems_left_row[$elems_idx] = $_self.dim.last_elem();
-                    $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
+                    $_self.$offset += $stride;
                     if IdxA::REQUIRES_IDX {
-                        $_self.$idx.set_last_elem($idx_def);
+                        $_self.$idx.$idx_step(1);
                     }
-                    $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
                     Some(IdxA!($_self.inner, index, ret))
                 }
-            } else {
-                //normal(not last in row) element
-                $_self.elems_left_row[$elems_idx] -= 1;
-                let index = $_self.$idx.clone();
-                let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                $_self.$offset += $stride;
-                if IdxA::REQUIRES_IDX {
-                    $_self.$idx.$idx_step(1);
-                }
-                Some(IdxA!($_self.inner, index, ret))
             }
         };
     }
