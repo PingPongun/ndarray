@@ -2,41 +2,29 @@
 // All the iterators are thread safe the same way the slice's iterator are
 
 // read-only iterators use Sync => Send rules, same as `std::slice::Iter`.
-macro_rules! send_sync_read_only {
-    ($name:ident) => {
-        unsafe impl<'a, A, D: Dimension> Send for $name<'a, A, D>
-        where
-            A: Sync,
-            D: Send,
-        {
-        }
-        unsafe impl<'a, A, D: Dimension> Sync for $name<'a, A, D>
-        where
-            A: Sync,
-            D: Sync,
-        {
-        }
-    };
-}
-
 // read-write iterators use Send => Send rules, same as `std::slice::IterMut`.
-macro_rules! send_sync_read_write {
-    ($name:ident) => {
-        unsafe impl<'a, A, D: Dimension> Send for $name<'a, A, D>
+macro_rules! send_sync_bi {    
+    ($name:ident,$A_trait:ident,$idx:expr,$simple:expr) => {
+    unsafe impl<'a, A, D: Dimension> Send for BaseIter<A, D, $idx, $simple, $name<'a, A>>
         where
-            A: Send,
+            A: $A_trait,
             D: Send,
         {
         }
-        unsafe impl<'a, A, D: Dimension> Sync for $name<'a, A, D>
+        unsafe impl<'a, A, D: Dimension> Sync for BaseIter<A, D, $idx, $simple, $name<'a, A>>
         where
             A: Sync,
             D: Sync,
         {
         }
     };
+    ($name:ident,$A_trait:ident) => {
+        send_sync_bi!($name,$A_trait,false,false);
+        send_sync_bi!($name,$A_trait,false,true);
+        send_sync_bi!($name,$A_trait,true,false);
+        send_sync_bi!($name,$A_trait,true,true);
+    };
 }
-
 macro_rules! send_sync_bi_array_view {    
     ($name:ident,$A_trait:ident,$idx:expr,$simple:expr) => {
     unsafe impl<'a, A, D: Dimension, DI: Dimension> Send for BaseIter<A, D, $idx, $simple, $name<'a, A, DI>>

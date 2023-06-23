@@ -54,7 +54,6 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     end: D,
     elems_left: usize,
     index: D,
-    standard_layout: bool,
     elems_left_row: [usize; 2],
     elems_left_row_back_idx: usize,
     offset_front: isize,
@@ -62,20 +61,22 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     inner: IdxA::Inner,
     _item: PhantomData<IdxA>,
 }
+
 /// BaseIterNdSINGLE_ENDED_FOLDING- BaseIterNd optimized for single ended use (does not implement DoubleEndedIterator & ParallelIter)
 /// intended mostly for simple use cases as array.iter().fold(...), array.iter.sum(), ..
-/// iterating with next() may be less performant than with BaseIterNd, but fold() based function are faster (mostly thanks to faster creation time) (especially for small arrays & IxDyn)
+/// iterating with next() may be less performant(in some cases) than with BaseIterNd, but creation time is shorter (especially important for small arrays & IxDyn)
 pub struct BaseIterNdSEF<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
     ptr: *mut A,
     dim: D,
     strides: D,
     elems_left: usize,
+    elems_left_row: [usize; 1],
     index: D,
-    standard_layout: bool,
     offset_front: isize,
     inner: IdxA::Inner,
     _item: PhantomData<IdxA>,
 }
+
 /// Base for iterators over all axes.
 ///
 /// Iterator element type is `*mut A`.
@@ -204,132 +205,192 @@ pub(crate) mod _macros {
             impl_BIItem!( $name, [$($generics_ty)*], [], [], $ret, (), _inner, $pat => $func);
         };
     }
-
-    macro_rules! BaseIterNdFoldInnerWhile {
-        ($_self:ident,$accum:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident, $offset:ident, $elems_idx:expr ) => {
-            while 0 != $elems_idx {
-                $elems_idx -= 1;
-                unsafe {
-                    $accum = $g(
-                        $accum,
-                        IdxA!(
-                            $_self.inner,
-                            $_self.$idx.clone(),
-                            $_self.ptr.offset($_self.$offset)
-                        ),
-                    );
+    macro_rules! BaseIterNdFoldOuterLoop {
+        ($_self:ident, $idx:ident, $idx_jump_h:ident, $idx_def:expr, $offset:ident, $offset_func:ident, $inner_loop:expr) => {
+            loop {
+                $_self.elems_left -= $_self.elems_left_row[0];
+                $inner_loop;
+                if $_self.elems_left > $_self.dim.last_elem() {
+                    $_self.elems_left_row[0] = $_self.dim.last_elem();
+                } else if $_self.elems_left == 0 {
+                    break;
+                } else {
+                    $_self.elems_left_row[0] = $_self.elems_left;
                 }
+                $_self.dim.$idx_jump_h(&mut $_self.$idx);
+                $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
+                if IdxA::REQUIRES_IDX {
+                    $_self.$idx.set_last_elem($idx_def);
+                }
+            }
+        };
+    }
+
+    macro_rules! BaseIterNdFold {
+        ($_self:ident,$init:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr,$fold:ident, $offset:ident, $offset_func:ident) => {
+            let mut accum = $init;
+            $_self.elems_left += $_self.elems_left_row[0];
+            $pre_fold;
+            if $_self.strides.last_elem() == 1 {
+                BaseIterNdFoldOuterLoop! {
+                    $_self, $idx, $idx_jump_h, $idx_def, $offset, $offset_func,
+                    {
+                        accum = unsafe {
+                            core::slice::from_raw_parts_mut(
+                                $_self.ptr.offset($_self.$offset),
+                                $_self.elems_left_row[0],
+                            )
+                        }
+                        .iter_mut()
+                        .$fold(accum, |acc, ptr| {
+                            let new_acc=$g(acc, IdxA!($_self.inner, $_self.$idx.clone(), ptr));
+                            if IdxA::REQUIRES_IDX {
+                                $_self.$idx.$idx_step(1);
+                            }
+                            new_acc
+                        });
+                    }
+                }
+            } else {
+                BaseIterNdFoldOuterLoop! {
+                    $_self, $idx, $idx_jump_h, $idx_def, $offset, $offset_func,
+                    {
+                        while 0 != $_self.elems_left_row[0] {
+                            $_self.elems_left_row[0] -= 1;
+                            unsafe {
+                                accum = $g(
+                                    accum,
+                                    IdxA!(
+                                        $_self.inner,
+                                        $_self.$idx.clone(),
+                                        $_self.ptr.offset($_self.$offset)
+                                    ),
+                                );
+                            }
+                            $_self.$offset += $stride;
+                            if IdxA::REQUIRES_IDX {
+                                $_self.$idx.$idx_step(1);
+                            }
+                        }
+                    }
+                }
+            }
+            return accum;
+        };
+        (nSEF, $_self:ident,$init:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr,$fold:ident, $offset:ident, $offset_func:ident) => {
+            BaseIterNdFold!(
+                $_self,
+                $init,
+                $g,
+                $stride,
+                $idx,
+                $idx_step,
+                $idx_jump_h,
+                $idx_def,
+                {
+                    $_self.elems_left += $_self.elems_left_row[1];
+                    $_self.elems_left_row_back_idx = 0;
+                    $_self.elems_left_row[1] = 0;
+                    $pre_fold
+                },
+                $fold,
+                $offset,
+                $offset_func
+            )
+        };
+    }
+    macro_rules! BaseIterNdNext {
+        ($_self:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr, $elems_idx:expr,$forward:ident,$offset:ident, $offset_func:ident,$elems_left_0_expr:expr) => {
+            if $_self.elems_left_row[$elems_idx] <= 1 {
+                //last element in row
+                if $_self.elems_left == 0 {
+                    $elems_left_0_expr
+                } else {
+                    //last element in each row
+                    let index = $_self.$idx.clone();
+                    let ret = unsafe { $_self.ptr.offset($_self.$offset) };
+                    $_self.elems_left -= $_self.dim.last_elem();
+                    $_self.elems_left_row[$elems_idx] = $_self.dim.last_elem();
+                    $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
+                    if IdxA::REQUIRES_IDX {
+                        $_self.$idx.set_last_elem($idx_def);
+                    }
+                    $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
+                    Some(IdxA!($_self.inner, index, ret))
+                }
+            } else {
+                //normal(not last in row) element
+                $_self.elems_left_row[$elems_idx] -= 1;
+                let index = $_self.$idx.clone();
+                let ret = unsafe { $_self.ptr.offset($_self.$offset) };
                 $_self.$offset += $stride;
                 if IdxA::REQUIRES_IDX {
                     $_self.$idx.$idx_step(1);
                 }
+                Some(IdxA!($_self.inner, index, ret))
             }
         };
-    }
-    macro_rules! BaseIterNdFoldNStd {
-        ($_self:ident,$accum:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr, $offset:ident, $offset_func:ident) => {
-            if $_self.dim.ndim() == 0 {
-                if $_self.elems_left_row[0] != 0 {
-                    $_self.elems_left_row[0] = 0;
-                    unsafe {
-                        $accum = $g(
-                            $accum,
-                            IdxA!(
-                                $_self.inner,
-                                $_self.$idx.clone(),
-                                $_self.ptr.offset($_self.$offset)
-                            ),
-                        );
-                    }
-                }
-            } else {
-                $_self.elems_left += $_self.elems_left_row[0];
-                $_self.elems_left += $_self.elems_left_row[1];
-                $pre_fold;
-                loop {
-                    $_self.elems_left -= $_self.elems_left_row[0];
-                    BaseIterNdFoldInnerWhile!(
-                        $_self,
-                        $accum,
-                        $g,
-                        $stride,
-                        $idx,
-                        $idx_step,
-                        $offset,
-                        $_self.elems_left_row[0]
-                    );
-                    $_self.dim.$idx_jump_h(&mut $_self.$idx);
-                    $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
-                    if $_self.elems_left > $_self.dim.last_elem() {
-                        $_self.elems_left_row[0] = $_self.dim.last_elem();
-                    } else if $_self.elems_left == 0 {
-                        $_self.elems_left_row_back_idx = 0;
-                        $_self.elems_left_row[1] = 0;
-                        break;
+        (SEF,$_self:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr, $elems_idx:expr,$forward:ident,$offset:ident, $offset_func:ident) => {
+            BaseIterNdNext!(
+                $_self,
+                $stride,
+                $idx,
+                $idx_step,
+                $idx_jump_h,
+                $idx_def,
+                $elems_idx,
+                $forward,
+                $offset,
+                $offset_func,
+                {
+                    //we are already in last row
+                    if $_self.elems_left_row[0] == 0 {
+                        None
                     } else {
-                        $_self.elems_left_row[0] = $_self.elems_left;
-                    }
-                    if IdxA::REQUIRES_IDX {
-                        $_self.$idx.set_last_elem($idx_def);
+                        //last elem of last row
+                        $_self.elems_left_row[0] = 0;
+                        let index = $_self.$idx.clone();
+                        let ret = unsafe { $_self.ptr.offset($_self.$offset) };
+                        Some(IdxA!($_self.inner, index, ret))
                     }
                 }
-            }
+            )
         };
-    }
-    macro_rules! BaseIterNdNext {
         ($_self:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr, $elems_idx:expr,$forward:ident,$offset:ident, $offset_func:ident) => {
-            if $_self.dim.ndim() == 0 {
-                if $_self.elems_left_row[0] != 0 {
-                    $_self.elems_left_row[0] = 0;
-                    unsafe {
-                        Some(IdxA!(
-                            $_self.inner,
-                            $_self.$idx.clone(),
-                            $_self.ptr.offset($_self.$offset)
-                        ))
-                    }
-                } else {
-                    None
-                }
-            } else {
-                if $_self.elems_left_row[$elems_idx] <= 1 {
-                    //last element in row
-                    if $_self.elems_left == 0 {
-                        //elems_left is multiple of self.dim.last_elem()
-                        //there are no "untouched" rows
-                        if $_self.elems_left_row_back_idx == 0 {
-                            //we are already in last row
-                            if $_self.elems_left_row[0] == 0 {
-                                None
-                            } else {
-                                //last elem of last row
-                                $_self.elems_left_row[0] = 0;
-                                let index = $_self.$idx.clone();
-                                let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                                Some(IdxA!($_self.inner, index, ret))
-                            }
+            BaseIterNdNext!(
+                $_self,
+                $stride,
+                $idx,
+                $idx_step,
+                $idx_jump_h,
+                $idx_def,
+                $elems_idx,
+                $forward,
+                $offset,
+                $offset_func,
+                {
+                    //elems_left is multiple of self.dim.last_elem()
+                    //there are no "untouched" rows
+                    if $_self.elems_left_row_back_idx == 0 {
+                        //we are already in last row
+                        if $_self.elems_left_row[0] == 0 {
+                            None
                         } else {
-                            //switching to last row
+                            //last elem of last row
+                            $_self.elems_left_row[0] = 0;
                             let index = $_self.$idx.clone();
                             let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                            if $forward {
-                                $_self.elems_left_row[0] = $_self.elems_left_row[1];
-                                $_self.elems_left_row[1] = 0;
-                            }
-                            $_self.elems_left_row_back_idx = 0;
-                            $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
-                            if IdxA::REQUIRES_IDX {
-                                $_self.$idx.set_last_elem($idx_def);
-                            }
-                            $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
                             Some(IdxA!($_self.inner, index, ret))
                         }
                     } else {
-                        //last element in each row
+                        //switching to last row
                         let index = $_self.$idx.clone();
                         let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                        $_self.elems_left -= $_self.dim.last_elem();
-                        $_self.elems_left_row[$elems_idx] = $_self.dim.last_elem();
+                        if $forward {
+                            $_self.elems_left_row[0] = $_self.elems_left_row[1];
+                            $_self.elems_left_row[1] = 0;
+                        }
+                        $_self.elems_left_row_back_idx = 0;
                         $_self.dim.$idx_jump_h(&mut $_self.$idx); //switch to new row
                         if IdxA::REQUIRES_IDX {
                             $_self.$idx.set_last_elem($idx_def);
@@ -337,18 +398,8 @@ pub(crate) mod _macros {
                         $_self.$offset = D::$offset_func(&$_self.$idx, &$_self.strides);
                         Some(IdxA!($_self.inner, index, ret))
                     }
-                } else {
-                    //normal(not last in row) element
-                    $_self.elems_left_row[$elems_idx] -= 1;
-                    let index = $_self.$idx.clone();
-                    let ret = unsafe { $_self.ptr.offset($_self.$offset) };
-                    $_self.$offset += $stride;
-                    if IdxA::REQUIRES_IDX {
-                        $_self.$idx.$idx_step(1);
-                    }
-                    Some(IdxA!($_self.inner, index, ret))
                 }
-            }
+            )
         };
     }
 }
@@ -719,40 +770,6 @@ mod base_iter_1d {
 
 mod base_iter_nd {
     use super::*;
-    macro_rules! BaseIterNdFold {
-        ($_self:ident,$init:ident,$g:ident,$stride:ident,$idx:ident, $idx_step:ident,$idx_jump_h:ident,$idx_def:expr,$pre_fold:expr,$fold:ident, $offset:ident, $offset_func:ident) => {
-            let mut accum = $init;
-            if $_self.standard_layout {
-                accum = unsafe {
-                    core::slice::from_raw_parts_mut(
-                        $_self.ptr.offset($_self.offset_front),
-                        $_self.len(),
-                    )
-                }
-                .iter_mut()
-                .$fold(accum, |acc, ptr| {
-                    $g(acc, IdxA!($_self.inner, $_self.$idx.clone(), ptr))
-                });
-                $_self.elems_left = 0;
-                $_self.elems_left_row = [0, 0];
-                $_self.elems_left_row_back_idx = 0;
-            } else {
-                BaseIterNdFoldNStd!(
-                    $_self,
-                    accum,
-                    $g,
-                    $stride,
-                    $idx,
-                    $idx_step,
-                    $idx_jump_h,
-                    $idx_def,
-                    $pre_fold,
-                    $offset,
-                    $offset_func
-                );
-            }
-            return accum;
-        };
     }
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIterNd<A, D, IDX, IdxA> {
         #[inline(always)]
@@ -776,7 +793,7 @@ mod base_iter_nd {
         /// iterating.
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let (standard_layout, mut elem_count, len, strides) = if IdxA::REQUIRES_IDX {
+            let (_, mut elem_count, len, strides) = if IdxA::REQUIRES_IDX {
                 (false, len.size(), len, strides)
             } else {
                 len.dim_stride_analysis(strides)
@@ -805,7 +822,6 @@ mod base_iter_nd {
                 strides,
                 end,
                 elems_left: elem_count,
-                standard_layout,
                 elems_left_row,
                 elems_left_row_back_idx,
                 offset_front: 0,
@@ -840,7 +856,6 @@ mod base_iter_nd {
                 ptr: self.ptr,
                 end: end1,
                 elems_left: index,
-                standard_layout: self.standard_layout,
                 elems_left_row: [0; 2],
                 elems_left_row_back_idx: 0,
                 offset_front: self.offset_front,
@@ -856,7 +871,6 @@ mod base_iter_nd {
                 ptr: self.ptr,
                 end: self.end,
                 elems_left: right_elems_left,
-                standard_layout: self.standard_layout,
                 elems_left_row: [0; 2],
                 elems_left_row_back_idx: 0,
                 offset_front,
@@ -903,6 +917,7 @@ mod base_iter_nd {
         {
             let stride = self.strides.last_elem() as isize;
             BaseIterNdFold!(
+                nSEF,
                 self,
                 init,
                 g,
@@ -946,6 +961,7 @@ mod base_iter_nd {
         {
             let stride = -(self.strides.last_elem() as isize);
             BaseIterNdFold!(
+                nSEF,
                 self,
                 init,
                 g,
@@ -983,7 +999,6 @@ mod base_iter_nd {
             end,
             elems_left,
             index,
-            standard_layout,
             elems_left_row,
             elems_left_row_back_idx,
             offset_front,
@@ -1003,19 +1018,25 @@ mod base_iter_nd_sef {
         /// iterating.
         #[inline(always)]
         pub unsafe fn new(ptr: *mut A, len: D, strides: D, inner: IdxA::Inner) -> Self {
-            let elem_count = len.size();
+            let mut elem_count = len.size();
             let standard_layout = if IdxA::REQUIRES_IDX {
                 false
             } else {
                 len.is_layout_c_unchecked(&strides)
             };
+            let elems_left_row = if standard_layout {
+                [elem_count]
+            } else {
+                [len.last_elem()]
+            };
+            elem_count -= elems_left_row[0];
             BaseIterNdSEF {
                 ptr,
                 index: D::zeros(len.ndim()),
                 dim: len,
                 strides,
                 elems_left: elem_count,
-                standard_layout,
+                elems_left_row,
                 offset_front: 0,
                 inner,
                 _item: PhantomData,
@@ -1030,40 +1051,20 @@ mod base_iter_nd_sef {
 
         #[inline(always)]
         fn next(&mut self) -> Option<Self::Item> {
-            if self.dim.ndim() == 0 {
-                if self.elems_left != 0 {
-                    self.elems_left = 0;
-                    Some(IdxA!(&self.inner, self.index.clone(), self.ptr))
-                } else {
-                    None
-                }
-            } else {
-                let stride = (self.strides.last_elem() as Ixs) as isize;
-                if self.dim.last_elem() == self.index.last_elem() {
-                    if self.elems_left == 0 {
-                        None
-                    } else {
-                        //switch to new row
-                        self.index.set_last_elem(0);
-                        self.dim.jump_h_index_unchecked(&mut self.index);
-                        self.offset_front = D::stride_h_offset(&self.index, &self.strides);
-                        self.elems_left -= 1;
-                        //return first from new row
-                        let index = self.index.clone();
-                        let ret = unsafe { self.ptr.offset(self.offset_front) };
-                        self.offset_front += stride;
-                        self.index.last_wrapping_add(1);
-                        Some(IdxA!(&self.inner, index, ret))
-                    }
-                } else {
-                    self.elems_left -= 1;
-                    let index = self.index.clone();
-                    let ret = unsafe { self.ptr.offset(self.offset_front) };
-                    self.offset_front += stride;
-                    self.index.last_wrapping_add(1);
-                    Some(IdxA!(&self.inner, index, ret))
-                }
-            }
+            let stride = (self.strides.last_elem() as Ixs) as isize;
+            BaseIterNdNext!(
+                SEF,
+                self,
+                stride,
+                index,
+                last_wrapping_add,
+                jump_h_index_unchecked,
+                0,
+                0,
+                true,
+                offset_front,
+                stride_h_offset
+            )
         }
         #[inline(always)]
         fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1077,73 +1078,20 @@ mod base_iter_nd_sef {
             G: FnMut(Acc, Self::Item) -> Acc,
         {
             let stride = self.strides.last_elem() as isize;
-            let mut accum = init;
-            if self.standard_layout {
-                accum = unsafe {
-                    core::slice::from_raw_parts_mut(self.ptr.offset(self.offset_front), self.len())
-                }
-                .iter_mut()
-                .fold(accum, |acc, ptr| {
-                    g(acc, IdxA!(&self.inner, self.index.clone(), ptr))
-                });
-                self.elems_left = 0;
-            } else {
-                if self.dim.ndim() == 0 {
-                    if self.len() != 0 {
-                        self.elems_left = 0;
-                        unsafe {
-                            accum = g(
-                                accum,
-                                IdxA!(
-                                    &self.inner,
-                                    self.index.clone(),
-                                    self.ptr.offset(self.offset_front)
-                                ),
-                            );
-                        }
-                    }
-                } else {
-                    self.elems_left -= self.dim.last_elem() - self.index.last_elem();
-                    while self.dim.last_elem() != self.index.last_elem() {
-                        unsafe {
-                            accum = g(
-                                accum,
-                                IdxA!(
-                                    &self.inner,
-                                    self.index.clone(),
-                                    self.ptr.offset(self.offset_front)
-                                ),
-                            );
-                        }
-                        self.offset_front += stride;
-                        self.index.last_wrapping_add(1);
-                    }
-                    self.dim.jump_h_index_unchecked(&mut self.index);
-                    self.offset_front = D::stride_h_offset(&self.index, &self.strides);
-                    self.index.set_last_elem(0);
-                    while self.elems_left != 0 {
-                        self.elems_left -= self.dim.last_elem();
-                        while self.dim.last_elem() != self.index.last_elem() {
-                            unsafe {
-                                accum = g(
-                                    accum,
-                                    IdxA!(
-                                        &self.inner,
-                                        self.index.clone(),
-                                        self.ptr.offset(self.offset_front)
-                                    ),
-                                );
-                            }
-                            self.offset_front += stride;
-                            self.index.last_wrapping_add(1);
-                        }
-                        self.dim.jump_h_index_unchecked(&mut self.index);
-                        self.offset_front = D::stride_h_offset(&self.index, &self.strides);
-                        self.index.set_last_elem(0);
-                    }
-                };
-            }
-            return accum;
+            BaseIterNdFold!(
+                self,
+                init,
+                g,
+                stride,
+                index,
+                last_wrapping_add,
+                jump_h_index_unchecked,
+                0,
+                {},
+                fold,
+                offset_front,
+                stride_h_offset
+            );
         }
     }
 
@@ -1152,7 +1100,7 @@ mod base_iter_nd_sef {
     {
         #[inline(always)]
         fn len(&self) -> usize {
-            self.elems_left //+self.elems_left_row//+ self.dim.last_elem() - self.index.last_elem()
+            self.elems_left + self.elems_left_row[0]
         }
     }
     clone_bounds!(
@@ -1164,8 +1112,8 @@ mod base_iter_nd_sef {
             dim,
             strides,
             elems_left,
+            elems_left_row,
             index,
-            standard_layout,
             offset_front,
             inner,
             _item,
@@ -1474,13 +1422,11 @@ pub type AxisChunksIterMut<'a, A, DI> =
 
 //=================================================================================================
 
-send_sync_read_only!(IndexedIter);
-send_sync_read_only!(Iter);
+send_sync_bi!(BIItemRef, Sync);
 send_sync_bi_array_view!(BIItemArrayView, Sync);
 send_sync_bi_array_view!(BIItemVariableArrayView, Sync);
 
-send_sync_read_write!(IndexedIterMut);
-send_sync_read_write!(IterMut);
+send_sync_bi!(BIItemRefMut, Send);
 send_sync_bi_array_view!(BIItemArrayViewMut, Send);
 send_sync_bi_array_view!(BIItemVariableArrayViewMut, Send);
 
