@@ -27,6 +27,7 @@ pub use self::lanes::{Lanes, LanesMut};
 pub use self::windows::Windows;
 use super::{ArrayView, ArrayViewMut, Axis, NdProducer};
 use super::{Dimension, Ixs};
+use core::fmt::Debug;
 use std::slice::{self};
 
 pub struct BaseIter0d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
@@ -87,6 +88,7 @@ pub enum BaseIter<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIIte
     Dn(BaseIterNd<A, D, IDX, IdxA>),
     DnSEF(BaseIterNdSEF<A, D, IDX, IdxA>),
 }
+
 #[macro_use]
 pub(crate) mod _macros {
     macro_rules! eitherBI {
@@ -410,8 +412,9 @@ pub(crate) mod _macros {
 
 pub trait BIItemT<A, D: Dimension, const IDX: bool> {
     type BIItem;
-    type Inner: Clone;
+    type Inner: Clone + Debug;
     const REQUIRES_IDX: bool;
+    const NAME: &'static str;
     #[inline(always)]
     fn item(_inner: &Self::Inner, _val: *mut A) -> Self::BIItem {
         unsafe {
@@ -488,6 +491,18 @@ _ptr => {
 //=================================================================================================
 mod base_iter_0d {
     use super::*;
+    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+        for BaseIter0d<A, D, IDX, IdxA>
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("BaseIter0d")
+                .field("ptr", &self.ptr)
+                .field("elems_left", &self.elems_left)
+                .field("inner", &self.inner)
+                .finish()
+        }
+    }
+
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIter0d<A, D, IDX, IdxA> {
         /// Creating a Baseiter is unsafe because shape and stride parameters need
         /// to be correct to avoid performing an unsafe pointer offset while
@@ -514,6 +529,10 @@ mod base_iter_0d {
             let mut right = self.clone();
             right.elems_left = 0;
             (self, right)
+        }
+        #[inline]
+        pub(crate) fn consume(&mut self) {
+            self.elems_left = 0;
         }
     }
 
@@ -571,6 +590,22 @@ mod base_iter_0d {
 //=================================================================================================
 mod base_iter_1d {
     use super::*;
+    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+        for BaseIter1d<A, D, IDX, IdxA>
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("BaseIter1d")
+                .field("ptr", &self.ptr)
+                .field("dim", &self.dim)
+                .field("index", &self.index)
+                .field("end", &self.end)
+                .field("strides", &self.strides)
+                .field("standard_layout", &self.standard_layout)
+                .field("inner", &self.inner)
+                .finish()
+        }
+    }
+
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIter1d<A, D, IDX, IdxA> {
         /// Creating a Baseiter is unsafe because shape and stride parameters need
         /// to be correct to avoid performing an unsafe pointer offset while
@@ -624,6 +659,10 @@ mod base_iter_1d {
                 _item: self._item,
             };
             (left, right)
+        }
+        #[inline]
+        pub(crate) fn consume(&mut self) {
+            self.index.set_last_elem(self.end.last_elem());
         }
     }
 
@@ -704,6 +743,12 @@ mod base_iter_1d {
                 }
             }
             return accum;
+        }
+        #[inline]
+        fn last(mut self) -> Option<Self::Item> {
+            let ret = self.next_back();
+            self.consume();
+            ret
         }
     }
 
@@ -801,7 +846,27 @@ mod base_iter_1d {
 
 mod base_iter_nd {
     use super::*;
+
+    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+        for BaseIterNd<A, D, IDX, IdxA>
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("BaseIterNd")
+                .field("ptr", &self.ptr)
+                .field("dim", &self.dim)
+                .field("index", &self.index)
+                .field("end", &self.end)
+                .field("strides", &self.strides)
+                .field("elems_left", &self.elems_left)
+                .field("elems_left_row", &self.elems_left_row)
+                .field("elems_left_row_back_idx", &self.elems_left_row_back_idx)
+                .field("offset_front", &self.offset_front)
+                .field("offset_back", &self.offset_back)
+                .field("inner", &self.inner)
+                .finish()
+        }
     }
+
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIterNd<A, D, IDX, IdxA> {
         #[inline(always)]
         fn elems_left_row_calc(mut self) -> Self {
@@ -912,6 +977,12 @@ mod base_iter_nd {
             .elems_left_row_calc();
             (left, right)
         }
+        #[inline]
+        pub(crate) fn consume(&mut self) {
+            self.elems_left = 0;
+            self.elems_left_row = [0, 0];
+            self.elems_left_row_back_idx = 0;
+        }
     }
 
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Iterator
@@ -962,6 +1033,12 @@ mod base_iter_nd {
                 offset_front,
                 stride_h_offset
             );
+        }
+        #[inline]
+        fn last(mut self) -> Option<Self::Item> {
+            let ret = self.next_back();
+            self.consume();
+            ret
         }
     }
 
@@ -1043,6 +1120,22 @@ mod base_iter_nd {
 
 mod base_iter_nd_sef {
     use super::*;
+    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+        for BaseIterNdSEF<A, D, IDX, IdxA>
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("BaseIterNdSEF")
+                .field("ptr", &self.ptr)
+                .field("dim", &self.dim)
+                .field("index", &self.index)
+                .field("strides", &self.strides)
+                .field("elems_left", &self.elems_left)
+                .field("elems_left_row", &self.elems_left_row)
+                .field("offset_front", &self.offset_front)
+                .field("inner", &self.inner)
+                .finish()
+        }
+    }
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIterNdSEF<A, D, IDX, IdxA> {
         /// Creating a Baseiter is unsafe because shape and stride parameters need
         /// to be correct to avoid performing an unsafe pointer offset while
@@ -1072,6 +1165,12 @@ mod base_iter_nd_sef {
                 inner,
                 _item: PhantomData,
             }
+        }
+
+        #[inline]
+        pub(crate) fn consume(&mut self) {
+            self.elems_left = 0;
+            self.elems_left_row[0] = 0;
         }
     }
 
@@ -1124,6 +1223,21 @@ mod base_iter_nd_sef {
                 stride_h_offset
             );
         }
+        #[inline]
+        fn last(mut self) -> Option<Self::Item> {
+            if self.len() != 0 {
+                let mut last_index = self.dim.clone();
+                last_index
+                    .slice_mut()
+                    .iter_mut()
+                    .for_each(|x| *x = x.saturating_sub(1));
+                self.consume();
+                let offset = D::stride_offset(&last_index, &self.strides);
+                Some(unsafe { IdxA!(self.inner, last_index, self.ptr.offset(offset)) })
+            } else {
+                None
+            }
+        }
     }
 
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> ExactSizeIterator
@@ -1160,6 +1274,19 @@ mod base_iter {
     {
         fn clone(&self) -> Self {
             eitherBIwrapped!(self,inner => inner.clone())
+        }
+    }
+
+    impl<A: Debug, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Debug
+        for BaseIter<A, D, IDX, SEF, IdxA>
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("{")?;
+            f.write_str("Iter type: ")?;
+            f.write_str(IdxA::NAME)?;
+            f.write_str("; Iter core: ")?;
+            eitherBI!(self,inner=> inner.fmt(f))?;
+            f.write_str("}")
         }
     }
     impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>>
@@ -1223,7 +1350,7 @@ mod base_iter {
         fn nth(&mut self, count: usize) -> Option<Self::Item> {
             eitherBI!(self,inner=>inner.nth(count))
         }
-        #[inline]
+        #[inline(always)]
         fn size_hint(&self) -> (usize, Option<usize>) {
             eitherBI!(self,inner=>inner.size_hint())
         }
@@ -1234,6 +1361,21 @@ mod base_iter {
             G: FnMut(Acc, Self::Item) -> Acc,
         {
             eitherBI!(self,inner=>inner.fold(init,g))
+        }
+
+        #[inline(always)]
+        fn count(mut self) -> usize
+        where
+            Self: Sized,
+        {
+            let ret = self.len();
+            eitherBI!(&mut self,inner=>inner.consume());
+            ret
+        }
+
+        #[inline]
+        fn last(self) -> Option<Self::Item> {
+            eitherBI!(self,inner=>inner.last())
         }
     }
 
