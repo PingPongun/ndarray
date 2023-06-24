@@ -1,3 +1,4 @@
+use super::BIItemArrayViewInner;
 use super::WindowsIter;
 use crate::imp_prelude::*;
 use crate::IntoDimension;
@@ -81,7 +82,7 @@ where
                 self.base.ptr.as_ptr(),
                 self.base.dim,
                 self.base.strides,
-                (self.window, self.strides),
+                BIItemArrayViewInner::new(self.window, self.strides),
             )
         }
     }

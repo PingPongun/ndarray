@@ -4,6 +4,8 @@ use crate::IntoDimension;
 use crate::iter::ExactChunksIterMut;
 use crate::{Layout, NdProducer};
 
+use super::BIItemArrayViewInner;
+
 impl_ndproducer! {
     ['a, A, D: Dimension]
     [Clone => 'a, A, D: Clone ]
@@ -83,7 +85,7 @@ where
                 self.base.ptr.as_ptr(),
                 self.base.dim,
                 self.base.strides,
-                (self.chunk, self.inner_strides),
+                BIItemArrayViewInner::new(self.chunk, self.inner_strides),
             )
         }
     }
@@ -166,7 +168,7 @@ where
                 self.base.ptr.as_ptr(),
                 self.base.dim,
                 self.base.strides,
-                (self.chunk, self.inner_strides),
+                BIItemArrayViewInner::new(self.chunk, self.inner_strides),
             )
         }
     }

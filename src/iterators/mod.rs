@@ -160,51 +160,7 @@ pub(crate) mod _macros {
             }
         };
     }
-    macro_rules! impl_BIItem {
-        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr,$n_idx_item:expr, $pat:pat => $func:expr) => {
-            pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
 
-            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
-                type BIItem = (D::Pattern, $ret);
-                type Inner = $inner_ty;
-                const REQUIRES_IDX: bool = true;
-
-                #[inline(always)]
-                fn item_w_idx(
-                    $inner: &Self::Inner,
-                    $idx: D,
-                    $pat: *mut A,
-                ) -> Self::BIItem {
-                    ($idx_op, $func)
-                }
-            }
-            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, false> for $name<$($generics_ty)*, $($generics)*> {
-                type BIItem = $ret;
-                type Inner = $inner_ty;
-                const REQUIRES_IDX: bool = $req_idx;
-
-                #[inline(always)]
-                fn item($inner: &Self::Inner,
-                    $pat: *mut A) -> Self::BIItem {
-                    $n_idx_item
-                }
-                #[inline(always)]
-                fn item_w_idx($inner: &Self::Inner,
-                    $idx: D, $pat: *mut A) -> Self::BIItem {
-                    $func
-                }
-            }
-        };
-        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident, $pat:pat => $func:expr) => {
-            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, $idx, true, $idx.clone().into_pattern(), unsafe{unreachable_unchecked()}, $pat => $func);
-        };
-        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
-            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, _idx, false, _idx.into_pattern(), $func, $pat => $func);
-        };
-        ( $name:ident, [$($generics_ty:tt)*], $ret:ty , $pat:pat => $func:expr) => {
-            impl_BIItem!( $name, [$($generics_ty)*], [], [], $ret, (), _inner, $pat => $func);
-        };
-    }
     macro_rules! BaseIterNdFoldOuterLoop {
         ($_self:ident, $idx:ident, $idx_jump_h:ident, $idx_def:expr, $offset:ident, $offset_func:ident, $inner_loop:expr) => {
             loop {
@@ -402,6 +358,54 @@ pub(crate) mod _macros {
             )
         };
     }
+    macro_rules! impl_BIItem {
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr,$n_idx_item:expr, $pat:pat => $func:expr) => {
+
+            pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
+
+            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
+                type BIItem = (D::Pattern, $ret);
+                type Inner = $inner_ty;
+                const REQUIRES_IDX: bool = true;
+                const NAME: &'static str = concat!("Indexed ", stringify!($name));
+
+                #[inline(always)]
+                fn item_w_idx(
+                    $inner: &Self::Inner,
+                    $idx: D,
+                    $pat: *mut A,
+                ) -> Self::BIItem {
+                    ($idx_op, $func)
+                }
+            }
+            impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, false> for $name<$($generics_ty)*, $($generics)*> {
+                type BIItem = $ret;
+                type Inner = $inner_ty;
+                const REQUIRES_IDX: bool = $req_idx;
+                const NAME: &'static str = concat!("Unindexed ", stringify!($name));
+
+                #[inline(always)]
+                fn item($inner: &Self::Inner,
+                    $pat: *mut A) -> Self::BIItem {
+                    $n_idx_item
+                }
+                #[inline(always)]
+                fn item_w_idx($inner: &Self::Inner,
+                    $idx: D, $pat: *mut A) -> Self::BIItem {
+                    $func
+                }
+            }
+        };
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident, $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, $idx, true, $idx.clone().into_pattern(), unsafe{unreachable_unchecked()}, $pat => $func);
+        };
+        ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident, $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [$($generics)*], [$($generics_constr)*], $ret, $inner_ty, $inner, _idx, false, _idx.into_pattern(), $func, $pat => $func);
+        };
+        ( $name:ident, [$($generics_ty:tt)*], $ret:ty , $pat:pat => $func:expr) => {
+            impl_BIItem!( $name, [$($generics_ty)*], [], [], $ret, (), _inner, $pat => $func);
+        };
+    }
 }
 
 pub trait BIItemT<A, D: Dimension, const IDX: bool> {
@@ -421,33 +425,60 @@ pub trait BIItemT<A, D: Dimension, const IDX: bool> {
         }
     }
 }
+#[derive(Debug, Clone)]
+pub struct BIItemArrayViewInner<DI: Dimension> {
+    pub dim: DI,
+    pub strides: DI,
+}
+impl<DI: Dimension> BIItemArrayViewInner<DI> {
+    pub fn new(dim: DI, strides: DI) -> Self {
+        Self { dim, strides }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct BIItemVariableArrayViewInner<DI: Dimension> {
+    pub dim: DI,
+    pub strides: DI,
+    pub remainder_index: usize,
+    pub remainder_dim: DI,
+}
+
+impl<DI: Dimension> BIItemVariableArrayViewInner<DI> {
+    pub fn new(dim: DI, strides: DI, remainder_index: usize, remainder_dim: DI) -> Self {
+        Self {
+            dim,
+            strides,
+            remainder_index,
+            remainder_dim,
+        }
+    }
+}
 impl_BIItem!(BIItemPtr, [A], *mut A,ptr =>ptr);
 impl_BIItem!(BIItemRef, ['a, A], &'a A,ptr => unsafe{&*ptr});
 impl_BIItem!(BIItemRefMut, ['a, A], &'a mut A,ptr => unsafe{&mut *ptr});
-//(DI,DI)-> (Internal_Dim, Internal_Strides)
-impl_BIItem!(BIItemArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI,DI), inner,
-    ptr => unsafe{ArrayView::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItem!(BIItemArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI,DI), inner,
-    ptr => unsafe{ArrayViewMut::new_(ptr,inner.0.clone(), inner.1.clone() )});
-impl_BIItem!(BIItemVariableArrayView, ['a, A], [DI], [DI: Clone+Dimension], ArrayView<'a,A,DI>, (DI, DI, usize, DI), _inner,idx,
+impl_BIItem!(BIItemArrayView, ['a, A], [DI], [DI: Dimension], ArrayView<'a,A,DI>, BIItemArrayViewInner<DI>, inner,
+    ptr => unsafe{ArrayView::new_(ptr,inner.dim.clone(), inner.strides.clone() )});
+impl_BIItem!(BIItemArrayViewMut, ['a, A], [DI], [DI: Dimension], ArrayViewMut<'a,A,DI>, BIItemArrayViewInner<DI>, inner,
+    ptr => unsafe{ArrayViewMut::new_(ptr,inner.dim.clone(), inner.strides.clone() )});
+impl_BIItem!(BIItemVariableArrayView, ['a, A], [DI], [DI: Dimension], ArrayView<'a,A,DI>, BIItemVariableArrayViewInner<DI>, _inner,idx,
 _ptr => {
     if D::NDIM == Some(1) {
-        if idx[0] == _inner.2 {
-            unsafe { ArrayView::new_(_ptr, _inner.3.clone(), _inner.1.clone()) }
+        if idx[0] == _inner.remainder_index {
+            unsafe { ArrayView::new_(_ptr, _inner.remainder_dim.clone(), _inner.strides.clone()) }
         } else {
-            unsafe { ArrayView::new_(_ptr, _inner.0.clone(), _inner.1.clone()) }
+            unsafe { ArrayView::new_(_ptr, _inner.dim.clone(), _inner.strides.clone()) }
         }
     } else {
         unimplemented!();
     }
 });
-impl_BIItem!(BIItemVariableArrayViewMut, ['a, A], [DI], [DI: Clone+Dimension], ArrayViewMut<'a,A,DI>, (DI, DI, usize, DI), _inner,idx,
+impl_BIItem!(BIItemVariableArrayViewMut, ['a, A], [DI], [DI: Dimension], ArrayViewMut<'a,A,DI>, BIItemVariableArrayViewInner<DI>, _inner,idx,
 _ptr => {
     if D::NDIM == Some(1) {
-        if idx[0] == _inner.2 {
-            unsafe { ArrayViewMut::new_(_ptr, _inner.3.clone(), _inner.1.clone()) }
+        if idx[0] == _inner.remainder_index {
+            unsafe { ArrayViewMut::new_(_ptr, _inner.remainder_dim.clone(), _inner.strides.clone()) }
         } else {
-            unsafe { ArrayViewMut::new_(_ptr, _inner.0.clone(), _inner.1.clone()) }
+            unsafe { ArrayViewMut::new_(_ptr, _inner.dim.clone(), _inner.strides.clone()) }
         }
     } else {
         unimplemented!();

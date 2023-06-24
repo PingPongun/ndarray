@@ -1,3 +1,4 @@
+use super::BIItemArrayViewInner;
 use super::LanesIter;
 use super::LanesIterMut;
 use crate::imp_prelude::*;
@@ -85,7 +86,7 @@ where
                 self.base.ptr.as_ptr(),
                 self.base.dim,
                 self.base.strides,
-                (Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
+                BIItemArrayViewInner::new(Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
             )
         }
     }
@@ -137,7 +138,7 @@ where
                 self.base.ptr.as_ptr(),
                 self.base.dim,
                 self.base.strides,
-                (Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
+                BIItemArrayViewInner::new(Ix1(self.inner_len), Ix1(self.inner_stride as usize)),
             )
         }
     }

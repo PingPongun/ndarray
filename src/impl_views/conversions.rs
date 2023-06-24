@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 
 use crate::imp_prelude::*;
 
-use crate::iterators::BIItemT;
+use crate::iterators::{BIItemT, BIItemRef, BIItemArrayViewInner};
 use crate::BaseIter;
 
 use crate::dimension::offset_from_low_addr_ptr_to_logical_ptr;
@@ -207,7 +207,7 @@ where
                 v.ptr.as_ptr(),
                 Ix1(v.dim.axis(Axis(0))),
                 Ix1(v.strides.axis(Axis(0))),
-                (v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
+                BIItemArrayViewInner::new(v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
             )
         }
     }
@@ -271,7 +271,7 @@ where
                 v.ptr.as_ptr(),
                 Ix1(v.dim.axis(Axis(0))),
                 Ix1(v.strides.axis(Axis(0))),
-                (v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
+                BIItemArrayViewInner::new(v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
             )
         }
     }

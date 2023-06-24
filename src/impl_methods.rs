@@ -26,8 +26,10 @@ use crate::dimension::broadcast::co_broadcast;
 use crate::dimension::reshape_dim;
 use crate::error::{self, ErrorKind, ShapeError, from_kind};
 use crate::math_cell::MathCell;
+use crate::iterators::BIItemArrayViewInner;
 use crate::iterators::BIItemRef;
 use crate::iterators::BIItemRefMut;
+use crate::iterators::BIItemVariableArrayViewInner;
 use crate::itertools::zip;
 use crate::AxisDescription;
 use crate::order::Order;
@@ -1298,7 +1300,7 @@ where
                 v.ptr.as_ptr(),
                 Ix1(v.dim.axis(axis)),
                 Ix1(v.strides.axis(axis)),
-                (v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
+                BIItemArrayViewInner::new(v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
             )
         }
     }
@@ -1321,7 +1323,7 @@ where
                 v.ptr.as_ptr(),
                 Ix1(v.dim.axis(axis)),
                 Ix1(v.strides.axis(axis)),
-                (v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
+                BIItemArrayViewInner::new(v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
             )
         }
     }
@@ -1385,7 +1387,12 @@ where
                 v.ptr.as_ptr(),
                 Ix1(iter_len),
                 Ix1(stride as usize),
-                (inner_dim, v.strides, n_whole_chunks, partial_chunk_dim),
+                BIItemVariableArrayViewInner::new(
+                    inner_dim,
+                    v.strides,
+                    n_whole_chunks,
+                    partial_chunk_dim,
+                ),
             )
         }
     }
@@ -1429,7 +1436,12 @@ where
                 v.ptr.as_ptr(),
                 Ix1(iter_len),
                 Ix1(stride as usize),
-                (inner_dim, v.strides, n_whole_chunks, partial_chunk_dim),
+                BIItemVariableArrayViewInner::new(
+                    inner_dim,
+                    v.strides,
+                    n_whole_chunks,
+                    partial_chunk_dim,
+                ),
             )
         }
     }
