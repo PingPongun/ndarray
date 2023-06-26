@@ -12,7 +12,6 @@ use alloc::vec::Vec;
 use rawpointer::PointerExt;
 use std::mem::{size_of, ManuallyDrop};
 
-use crate::dimension::move_min_stride_axis_to_last;
 use crate::imp_prelude::*;
 
 use crate::argument_traits::AssignElem;
@@ -519,6 +518,72 @@ where
     {
         let (outer, inner) = target.split_inner_outer(self.view_mut());
         unsafe { BaseIter::new(outer.ptr.as_ptr(), outer.dim, outer.strides, inner) }
+    }
+
+    /// Return an generic iterator over the array. Iterating pattern & returned element depends on `target`.
+    /// Iterator may visit elements in arbitrary order to improve perfomance in some cases (creation time is slightly increased)
+    /// Same as [`ArrayBase::generic_iter`], exept for visiting order
+    /// higher `opt_level` means stronger optimization (so potentialy faster iteration, but also longer creation time)
+    /// `opt_level` == 0 -> no optimization, same as .generic_iter()
+    /// `opt_level` == 255 -> max optimization
+    #[inline]
+    pub fn generic_unordered_iter<
+        const IDX: bool,
+        const SEF: bool,
+        DO: Dimension,
+        IdxA: BIItemT<A, DO, IDX>,
+        T: BIProducer<A, D, DO, IdxA>,
+    >(
+        &self,
+        target: T,
+        opt_level: u8,
+    ) -> BaseIter<A, DO, IDX, SEF, IdxA>
+    where
+        S: Data,
+    {
+        let (outer, inner) = target.split_inner_outer(self.view());
+        unsafe {
+            BaseIter::new_unordered(
+                outer.ptr.as_ptr(),
+                outer.dim,
+                outer.strides,
+                inner,
+                opt_level,
+            )
+        }
+    }
+
+    /// Return an mutable generic iterator over the array. Iterating pattern & returned element depends on `target`.
+    /// Iterator may visit elements in arbitrary order to improve perfomance in some cases (creation time is slightly increased)
+    /// Same as [`ArrayBase::generic_iter_mut`], exept for visiting order
+    /// higher `opt_level` means stronger optimization (so potentialy faster iteration, but also longer creation time)
+    /// `opt_level` == 0 -> no optimization, same as .generic_iter_mut()
+    /// `opt_level` == 255 -> max optimization
+    #[inline]
+    pub fn generic_unordered_iter_mut<
+        const IDX: bool,
+        const SEF: bool,
+        DO: Dimension,
+        IdxA: BIItemT<A, DO, IDX>,
+        T: BIProducerMut<A, D, DO, IdxA>,
+    >(
+        &mut self,
+        target: T,
+        opt_level: u8,
+    ) -> BaseIter<A, DO, IDX, SEF, IdxA>
+    where
+        S: DataMut,
+    {
+        let (outer, inner) = target.split_inner_outer(self.view_mut());
+        unsafe {
+            BaseIter::new_unordered(
+                outer.ptr.as_ptr(),
+                outer.dim,
+                outer.strides,
+                inner,
+                opt_level,
+            )
+        }
     }
 
     /// Return a sliced view of the array.
@@ -2543,12 +2608,7 @@ where
         A: 'a,
         S: Data,
     {
-        let mut v = self.view();
-        if v.strides.last_elem() != 1
-        {
-                move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-        }
-        v.generic_iter::<false, true, _, _, _>(ProducerRef())
+        self.generic_unordered_iter::<false, true, _, _, _>(ProducerRef(),1)
             .fold(init, f)
     }
 
@@ -2701,12 +2761,7 @@ where
         A: 'a,
         F: FnMut(&'a mut A),
     {
-        let mut v = self.view_mut();
-        if v.strides.last_elem() != 1
-        {
-                move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
-        }
-        v.generic_iter_mut::<false, true, _, _, _>(ProducerRefMut())
+        self.generic_unordered_iter_mut::<false, true, _, _, _>(ProducerRefMut(),1)
             .for_each(f);        
     }
 

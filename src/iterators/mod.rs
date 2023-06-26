@@ -14,6 +14,7 @@ pub mod iter;
 mod lanes;
 mod windows;
 
+use crate::dimension::move_min_stride_axis_to_last;
 use crate::{dimension::DimensionExt, RemoveAxis, Slice};
 use alloc::vec::Vec;
 use core::hint::unreachable_unchecked;
@@ -1633,6 +1634,26 @@ mod base_iter {
                     }
                 }
             }
+        }
+
+        /// Create iter with dim&strides shuffled to get faster iteration.
+        /// ! Created iter may not follow logical order !
+        /// May be slower than .new() in some cases (for very short iterators)
+        /// higher `opt_level` means stronger optimization (so potentialy faster iteration, but also longer creation time)
+        /// `opt_level` == 0 -> no optimization, same as .new()
+        /// `opt_level` == 255 -> max optimization
+        #[inline(always)]
+        pub unsafe fn new_unordered(
+            ptr: *mut A,
+            mut len: D,
+            mut strides: D,
+            inner: IdxA::Inner,
+            opt_level: u8,
+        ) -> Self {
+            if opt_level > 1 && strides.last_elem() != 1 {
+                move_min_stride_axis_to_last(&mut len, &mut strides);
+            }
+            Self::new(ptr, len, strides, inner)
         }
     }
     impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> BaseIter<A, D, IDX, false, IdxA> {
