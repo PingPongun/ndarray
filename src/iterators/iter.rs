@@ -8,6 +8,11 @@
 
 pub use crate::dimension::Axes;
 pub use crate::indexes::{Indices, IndicesIter};
+pub use crate::iterators::producer::{
+    ProducerAxis, ProducerAxisChunks, ProducerAxisChunksMut, ProducerAxisMut, ProducerExactChunks,
+    ProducerExactChunksMut, ProducerLanes, ProducerLanesMut, ProducerRef, ProducerRefMut,
+    ProducerWindows,
+};
 pub use crate::iterators::{
     AxisChunksIter, AxisChunksIterMut, AxisIter, AxisIterMut, ExactChunks, ExactChunksIter,
     ExactChunksIterMut, ExactChunksMut, IndexedIter, IndexedIterMut, Iter, IterMut, Lanes,

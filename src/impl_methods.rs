@@ -6,35 +6,38 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::mem::{size_of, ManuallyDrop};
 use alloc::slice;
 use alloc::vec;
 use alloc::vec::Vec;
 use rawpointer::PointerExt;
+use std::mem::{size_of, ManuallyDrop};
 
+use crate::dimension::move_min_stride_axis_to_last;
 use crate::imp_prelude::*;
 
-use crate::{arraytraits, DimMax};
 use crate::argument_traits::AssignElem;
 use crate::dimension;
-use crate::dimension::IntoDimension;
-use crate::dimension::{
-    abs_index, axes_of, do_slice, merge_axes, move_min_stride_axis_to_last,
-    offset_from_low_addr_ptr_to_logical_ptr, size_of_shape_checked, stride_offset, Axes,
-};
 use crate::dimension::broadcast::co_broadcast;
 use crate::dimension::reshape_dim;
-use crate::error::{self, ErrorKind, ShapeError, from_kind};
-use crate::math_cell::MathCell;
-use crate::iterators::BIItemArrayViewInner;
-use crate::iterators::BIItemRef;
-use crate::iterators::BIItemRefMut;
-use crate::iterators::BIItemVariableArrayViewInner;
+use crate::dimension::IntoDimension;
+use crate::dimension::{
+    abs_index, axes_of, do_slice, merge_axes, offset_from_low_addr_ptr_to_logical_ptr,
+    size_of_shape_checked, stride_offset, Axes,
+};
+use crate::error::{self, from_kind, ErrorKind, ShapeError};
+use crate::iterators::producer::{
+    BIProducer, BIProducerMut, ProducerAxis, ProducerAxisChunks, ProducerAxisChunksMut,
+    ProducerAxisMut, ProducerRef, ProducerRefMut,
+};
+use crate::iterators::BIItemT;
+use crate::iterators::BaseIter;
 use crate::itertools::zip;
-use crate::AxisDescription;
+use crate::math_cell::MathCell;
 use crate::order::Order;
 use crate::shape_builder::ShapeArg;
 use crate::zip::{IntoNdProducer, Zip};
+use crate::AxisDescription;
+use crate::{arraytraits, DimMax};
 
 use crate::iter::{
     AxisChunksIter, AxisChunksIterMut, AxisIter, AxisIterMut, ExactChunks, ExactChunksMut,
@@ -404,12 +407,13 @@ where
     /// is where the rightmost index is varying the fastest.
     ///
     /// Iterator element type is `&A`.
+    #[inline]
     pub fn iter(&self) -> Iter<'_, A, D>
     where
         S: Data,
     {
         debug_assert!(self.pointer_is_inbounds());
-        self.view().into_iter()
+        self.generic_iter(ProducerRef())
     }
 
     /// Return an iterator of mutable references to the elements of the array.
@@ -418,11 +422,12 @@ where
     /// is where the rightmost index is varying the fastest.
     ///
     /// Iterator element type is `&mut A`.
+    #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_, A, D>
     where
         S: DataMut,
     {
-        self.view_mut().into_iter()
+        self.generic_iter_mut(ProducerRefMut())
     }
 
     /// Return an iterator of indexes and references to the elements of the array.
@@ -433,11 +438,12 @@ where
     /// Iterator element type is `(D::Pattern, &A)`.
     ///
     /// See also [`Zip::indexed`]
+    #[inline]
     pub fn indexed_iter(&self) -> IndexedIter<'_, A, D>
     where
         S: Data,
     {
-        self.view().into_iter()
+        self.generic_iter(ProducerRef())
     }
 
     /// Return an iterator of indexes and mutable references to the elements of the array.
@@ -446,11 +452,73 @@ where
     /// is where the rightmost index is varying the fastest.
     ///
     /// Iterator element type is `(D::Pattern, &mut A)`.
+    #[inline]
     pub fn indexed_iter_mut(&mut self) -> IndexedIterMut<'_, A, D>
     where
         S: DataMut,
     {
-        self.view_mut().into_iter()
+        self.generic_iter_mut(ProducerRefMut())
+    }
+
+    /// Return an generic iterator over the array. Iterating pattern & returned element depends on `target`
+    ///
+    /// Elements are visited in the *logical order* of the array, which
+    /// is where the rightmost index is varying the fastest.
+    ///
+    /// # generics
+    /// - `IDX`: bool - if true returned item contains index (eg. (D::Pattern, &A))
+    /// - `SEF`: bool - if true returned iterator has reduced trait implementations(does not implement ParallelIter & DoubleEndedIterator), but creation time is faster
+    /// - `DO`, `IdxA`, `T`- leave them _, they are infered from `target`
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ndarray::{Axis, Array3};
+    /// use ndarray::iter::{ProducerAxisChunks, ProducerRef, IndexedIter};
+    ///
+    /// let a = Array3::<f64>::zeros([3, 4, 2]);
+    /// let iter = a.generic_iter::<false,false,_,_,_>(ProducerAxisChunks::new(Axis(0), 2));//same as a.axis_chunks_iter(Axis(0),2)
+    /// let iter = a.generic_iter::<true,false,_,_,_>(ProducerAxisChunks::new(Axis(0), 2));//same as a.axis_chunks_iter(Axis(0),2), but returns also index of a chunk: (usize, ArrayView3)
+    ///
+    /// let iter: IndexedIter<_,_> = a.generic_iter(ProducerRef());//same as a.indexed_iter()
+    /// let iter = a.generic_iter::<true,true,_,_,_>(ProducerRef());//same as a.indexed_iter(), but creates slighly faster and does not support DoubleEndedIterator
+    /// ```
+    #[inline]
+    pub fn generic_iter<
+        const IDX: bool,
+        const SEF: bool,
+        DO: Dimension,
+        IdxA: BIItemT<A, DO, IDX>,
+        T: BIProducer<A, D, DO, IdxA>,
+    >(
+        &self,
+        target: T,
+    ) -> BaseIter<A, DO, IDX, SEF, IdxA>
+    where
+        S: Data,
+    {
+        let (outer, inner) = target.split_inner_outer(self.view());
+        unsafe { BaseIter::new(outer.ptr.as_ptr(), outer.dim, outer.strides, inner) }
+    }
+
+    /// Return an mutable generic iterator over the array. Iterating pattern & returned element depends on `target`
+    /// See [`ArrayBase::generic_iter`]
+    #[inline]
+    pub fn generic_iter_mut<
+        const IDX: bool,
+        const SEF: bool,
+        DO: Dimension,
+        IdxA: BIItemT<A, DO, IDX>,
+        T: BIProducerMut<A, D, DO, IdxA>,
+    >(
+        &mut self,
+        target: T,
+    ) -> BaseIter<A, DO, IDX, SEF, IdxA>
+    where
+        S: DataMut,
+    {
+        let (outer, inner) = target.split_inner_outer(self.view_mut());
+        unsafe { BaseIter::new(outer.ptr.as_ptr(), outer.dim, outer.strides, inner) }
     }
 
     /// Return a sliced view of the array.
@@ -1294,15 +1362,7 @@ where
         S: Data,
         D: RemoveAxis,
     {
-        let v = self.view();
-        unsafe {
-            AxisIter::new(
-                v.ptr.as_ptr(),
-                Ix1(v.dim.axis(axis)),
-                Ix1(v.strides.axis(axis)),
-                BIItemArrayViewInner::new(v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
-            )
-        }
+        self.generic_iter(ProducerAxis::new(axis))
     }
 
     /// Return an iterator that traverses over `axis`
@@ -1317,15 +1377,7 @@ where
         S: DataMut,
         D: RemoveAxis,
     {
-        let v = self.view_mut();
-        unsafe {
-            AxisIterMut::new(
-                v.ptr.as_ptr(),
-                Ix1(v.dim.axis(axis)),
-                Ix1(v.strides.axis(axis)),
-                BIItemArrayViewInner::new(v.dim.remove_axis(axis), v.strides.remove_axis(axis)),
-            )
-        }
+        self.generic_iter_mut(ProducerAxisMut::new(axis))
     }
 
     /// Return an iterator that traverses over `axis` by chunks of `size`,
@@ -1358,43 +1410,7 @@ where
     where
         S: Data,
     {
-        assert_ne!(size, 0, "Chunk size must be nonzero.");
-        let v = self.view();
-        let axis_len = v.len_of(axis);
-        let n_whole_chunks = axis_len / size;
-        let chunk_remainder = axis_len % size;
-        let iter_len = if chunk_remainder == 0 {
-            n_whole_chunks
-        } else {
-            n_whole_chunks + 1
-        };
-        let stride = if n_whole_chunks == 0 {
-            // This case avoids potential overflow when `size > axis_len`.
-            0
-        } else {
-            v.stride_of(axis) * size as isize
-        };
-
-        let axis = axis.index();
-        let mut inner_dim = v.dim.clone();
-        inner_dim[axis] = size;
-
-        let mut partial_chunk_dim = v.dim;
-        partial_chunk_dim[axis] = chunk_remainder;
-
-        unsafe {
-            AxisChunksIter::new(
-                v.ptr.as_ptr(),
-                Ix1(iter_len),
-                Ix1(stride as usize),
-                BIItemVariableArrayViewInner::new(
-                    inner_dim,
-                    v.strides,
-                    n_whole_chunks,
-                    partial_chunk_dim,
-                ),
-            )
-        }
+        self.generic_iter(ProducerAxisChunks::new(axis, size))
     }
 
     /// Return an iterator that traverses over `axis` by chunks of `size`,
@@ -1407,43 +1423,7 @@ where
     where
         S: DataMut,
     {
-        assert_ne!(size, 0, "Chunk size must be nonzero.");
-        let v = self.view_mut();
-        let axis_len = v.len_of(axis);
-        let n_whole_chunks = axis_len / size;
-        let chunk_remainder = axis_len % size;
-        let iter_len = if chunk_remainder == 0 {
-            n_whole_chunks
-        } else {
-            n_whole_chunks + 1
-        };
-        let stride = if n_whole_chunks == 0 {
-            // This case avoids potential overflow when `size > axis_len`.
-            0
-        } else {
-            v.stride_of(axis) * size as isize
-        };
-
-        let axis = axis.index();
-        let mut inner_dim = v.dim.clone();
-        inner_dim[axis] = size;
-
-        let mut partial_chunk_dim = v.dim;
-        partial_chunk_dim[axis] = chunk_remainder;
-
-        unsafe {
-            AxisChunksIterMut::new(
-                v.ptr.as_ptr(),
-                Ix1(iter_len),
-                Ix1(stride as usize),
-                BIItemVariableArrayViewInner::new(
-                    inner_dim,
-                    v.strides,
-                    n_whole_chunks,
-                    partial_chunk_dim,
-                ),
-            )
-        }
+        self.generic_iter_mut(ProducerAxisChunksMut::new(axis, size))
     }
 
     /// Return an exact chunks producer (and iterable).
@@ -1951,7 +1931,7 @@ where
             };
             Ok(CowArray::from(Array::from_shape_trusted_iter_unchecked(
                 shape,
-                view.into_iter::<false, true, BIItemRef<A>>(),
+                view.generic_iter::<false, true, _, _, _>(ProducerRef()),
                 A::clone,
             )))
         }
@@ -2568,7 +2548,8 @@ where
         {
                 move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
         }
-        v.into_iter::<false, true, BIItemRef<A>>().fold(init, f)
+        v.generic_iter::<false, true, _, _, _>(ProducerRef())
+            .fold(init, f)
     }
 
     /// Call `f` by reference on each element and create a new array
@@ -2725,8 +2706,8 @@ where
         {
                 move_min_stride_axis_to_last(&mut v.dim, &mut v.strides);
         }
-        v.into_iter::<false, true, BIItemRefMut<A>>().for_each(f);
-        
+        v.generic_iter_mut::<false, true, _, _, _>(ProducerRefMut())
+            .for_each(f);        
     }
 
     /// Modify the array in place by calling `f` by **v**alue on each element.

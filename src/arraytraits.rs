@@ -15,6 +15,7 @@ use std::{hash, mem::size_of};
 use std::{iter::FromIterator, slice};
 
 use crate::imp_prelude::*;
+use crate::iterators::BaseIter;
 use crate::{
     dimension,
     iter::{Iter, IterMut},
@@ -236,7 +237,7 @@ where
     type IntoIter = Iter<'a, A, D>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_iter()
+        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides, ()) }
     }
 }
 
@@ -248,7 +249,7 @@ where
     type IntoIter = IterMut<'a, A, D>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_iter()
+        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides, ()) }
     }
 }
 

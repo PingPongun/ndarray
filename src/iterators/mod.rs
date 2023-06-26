@@ -14,6 +14,7 @@ pub mod iter;
 mod lanes;
 mod windows;
 
+use crate::{dimension::DimensionExt, RemoveAxis, Slice};
 use alloc::vec::Vec;
 use core::hint::unreachable_unchecked;
 use std::marker::PhantomData;
@@ -30,14 +31,15 @@ use super::{Dimension, Ixs};
 use core::fmt::Debug;
 use std::slice::{self};
 
-pub struct BaseIter0d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+pub struct BaseIter0d<A, D: Dimension, const IDX: bool, IdxA: _BIItemT> {
     ptr: *mut A,
     elems_left: usize,
     inner: IdxA::Inner,
+    _dim: PhantomData<D>,
     _item: PhantomData<IdxA>,
 }
 
-pub struct BaseIter1d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+pub struct BaseIter1d<A, D: Dimension, const IDX: bool, IdxA: _BIItemT> {
     ptr: *mut A,
     dim: D,
     strides: D,
@@ -48,7 +50,7 @@ pub struct BaseIter1d<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
     _item: PhantomData<IdxA>,
 }
 
-pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: _BIItemT> {
     ptr: *mut A,
     dim: D,
     strides: D,
@@ -66,7 +68,7 @@ pub struct BaseIterNd<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>
 /// BaseIterNdSINGLE_ENDED_FOLDING- BaseIterNd optimized for single ended use (does not implement DoubleEndedIterator & ParallelIter)
 /// intended mostly for simple use cases as array.iter().fold(...), array.iter.sum(), ..
 /// iterating with next() may be less performant(in some cases) than with BaseIterNd, but creation time is shorter (especially important for small arrays & IxDyn)
-pub struct BaseIterNdSEF<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> {
+pub struct BaseIterNdSEF<A, D: Dimension, const IDX: bool, IdxA: _BIItemT> {
     ptr: *mut A,
     dim: D,
     strides: D,
@@ -82,7 +84,7 @@ pub struct BaseIterNdSEF<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, I
 ///
 /// Iterator element type is `*mut A`.
 /// index and end values are only valid indices when elements_left >= 1
-pub enum BaseIter<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> {
+pub enum BaseIter<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: _BIItemT> {
     D0(BaseIter0d<A, D, IDX, IdxA>),
     D1(BaseIter1d<A, D, IDX, IdxA>),
     Dn(BaseIterNd<A, D, IDX, IdxA>),
@@ -364,10 +366,11 @@ pub(crate) mod _macros {
         ( $name:ident, [$($generics_ty:tt)*], [$($generics:tt)*], [$($generics_constr:tt)*], $ret:ty,$inner_ty:ty, $inner:ident,$idx:ident,$req_idx:expr,$idx_op:expr,$n_idx_item:expr, $pat:pat => $func:expr) => {
 
             pub struct $name< $($generics_ty)*, $($generics)*>(PhantomData<$ret>);
-
+            impl <'a, A, $($generics_constr)*> _BIItemT for $name<$($generics_ty)*, $($generics)*> {
+                type Inner = $inner_ty;
+            }
             impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, true> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = (D::Pattern, $ret);
-                type Inner = $inner_ty;
                 const REQUIRES_IDX: bool = true;
                 const NAME: &'static str = concat!("Indexed ", stringify!($name));
 
@@ -382,7 +385,6 @@ pub(crate) mod _macros {
             }
             impl<'a, A, D: Dimension, $($generics_constr)*> BIItemT<A, D, false> for $name<$($generics_ty)*, $($generics)*> {
                 type BIItem = $ret;
-                type Inner = $inner_ty;
                 const REQUIRES_IDX: bool = $req_idx;
                 const NAME: &'static str = concat!("Unindexed ", stringify!($name));
 
@@ -409,10 +411,11 @@ pub(crate) mod _macros {
         };
     }
 }
-
-pub trait BIItemT<A, D: Dimension, const IDX: bool> {
-    type BIItem;
+pub trait _BIItemT {
     type Inner: Clone + Debug;
+}
+pub trait BIItemT<A, D: Dimension, const IDX: bool>: _BIItemT {
+    type BIItem;
     const REQUIRES_IDX: bool;
     const NAME: &'static str;
     #[inline(always)]
@@ -489,6 +492,326 @@ _ptr => {
 });
 
 //=================================================================================================
+pub mod producer {
+
+    use super::*;
+    pub unsafe trait BIProducer<A, D: Dimension, DO: Dimension, IdxA: _BIItemT> {
+        fn split_inner_outer(self, arr: ArrayView<A, D>) -> (ArrayView<'_, A, DO>, IdxA::Inner);
+    }
+    pub unsafe trait BIProducerMut<A, D: Dimension, DO: Dimension, IdxA: _BIItemT> {
+        fn split_inner_outer(self, arr: ArrayViewMut<A, D>) -> (ArrayView<'_, A, DO>, IdxA::Inner);
+    }
+    //============================= Ref
+    pub struct ProducerRef();
+    pub struct ProducerRefMut();
+    unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D, BIItemRef<'a, A>> for ProducerRef {
+        #[inline(always)]
+        fn split_inner_outer(self, arr: ArrayView<A, D>) -> (ArrayView<'_, A, D>, ()) {
+            (arr, ())
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducerMut<A, D, D, BIItemRefMut<'a, A>> for ProducerRefMut {
+        #[inline(always)]
+        fn split_inner_outer(self, arr: ArrayViewMut<A, D>) -> (ArrayView<'_, A, D>, ()) {
+            (arr.into_view(), ())
+        }
+    }
+    //============================= Axis
+    pub struct ProducerAxis {
+        axis: Axis,
+    }
+
+    pub struct ProducerAxisMut(ProducerAxis);
+    impl ProducerAxis {
+        #[inline(always)]
+        pub fn new(axis: Axis) -> Self {
+            Self { axis }
+        }
+    }
+    impl ProducerAxisMut {
+        #[inline(always)]
+        pub fn new(axis: Axis) -> Self {
+            Self(ProducerAxis { axis })
+        }
+    }
+    unsafe impl<'a, A, D: Dimension + RemoveAxis>
+        BIProducer<A, D, Ix1, BIItemArrayView<'a, A, D::Smaller>> for ProducerAxis
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, Ix1>, BIItemArrayViewInner<D::Smaller>) {
+            unsafe {
+                (
+                    ArrayView::new_(
+                        arr.ptr.as_ptr(),
+                        Ix1(arr.dim.axis(self.axis)),
+                        Ix1(arr.strides.axis(self.axis)),
+                    ),
+                    BIItemArrayViewInner::new(
+                        arr.dim.remove_axis(self.axis),
+                        arr.strides.remove_axis(self.axis),
+                    ),
+                )
+            }
+        }
+    }
+    unsafe impl<'a, A, D: Dimension + RemoveAxis>
+        BIProducerMut<A, D, Ix1, BIItemArrayViewMut<'a, A, D::Smaller>> for ProducerAxisMut
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayViewMut<A, D>,
+        ) -> (ArrayView<'_, A, Ix1>, BIItemArrayViewInner<D::Smaller>) {
+            self.0.split_inner_outer(arr.into_view())
+        }
+    }
+
+    //============================= Lanes
+    pub struct ProducerLanes {
+        axis: Axis,
+    }
+
+    pub struct ProducerLanesMut(ProducerLanes);
+    impl ProducerLanes {
+        #[inline(always)]
+        pub fn new(axis: Axis) -> Self {
+            Self { axis }
+        }
+    }
+    impl ProducerLanesMut {
+        #[inline(always)]
+        pub fn new(axis: Axis) -> Self {
+            Self(ProducerLanes { axis })
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D::Smaller, BIItemArrayView<'a, A, Ix1>>
+        for ProducerLanes
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, D::Smaller>, BIItemArrayViewInner<Ix1>) {
+            let ndim = arr.ndim();
+            let len;
+            let stride;
+            let iter_v = if ndim == 0 {
+                len = 1;
+                stride = 1;
+                arr.try_remove_axis(Axis(0))
+            } else {
+                let i = self.axis.index();
+                len = arr.dim[i];
+                stride = arr.strides[i] as isize;
+                arr.try_remove_axis(self.axis)
+            };
+            (
+                iter_v,
+                BIItemArrayViewInner::new(Ix1(len), Ix1(stride as usize)),
+            )
+        }
+    }
+    unsafe impl<'a, A, D: Dimension + RemoveAxis>
+        BIProducer<A, D, D::Smaller, BIItemArrayViewMut<'a, A, Ix1>> for ProducerLanesMut
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, D::Smaller>, BIItemArrayViewInner<Ix1>) {
+            self.0.split_inner_outer(arr)
+        }
+    }
+
+    //============================= ExactChunks
+    pub struct ProducerExactChunks<D> {
+        chunk: D,
+    }
+    pub struct ProducerExactChunksMut<D>(ProducerExactChunks<D>);
+    impl<D: Dimension> ProducerExactChunks<D> {
+        #[inline(always)]
+        pub fn new(chunk: D) -> Self {
+            Self { chunk }
+        }
+    }
+    impl<D: Dimension> ProducerExactChunksMut<D> {
+        #[inline(always)]
+        pub fn new(chunk: D) -> Self {
+            Self(ProducerExactChunks { chunk })
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D, BIItemArrayView<'a, A, D>>
+        for ProducerExactChunks<D>
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            mut arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, D>, BIItemArrayViewInner<D>) {
+            ndassert!(
+                arr.ndim() == self.chunk.ndim(),
+                concat!(
+                    "Chunk dimension {} does not match array dimension {} ",
+                    "(with array of shape {:?})"
+                ),
+                self.chunk.ndim(),
+                arr.ndim(),
+                arr.shape()
+            );
+            for i in 0..arr.ndim() {
+                arr.dim[i] /= self.chunk[i];
+            }
+            let inner_strides = arr.raw_strides();
+            arr.strides *= &self.chunk;
+            (arr, BIItemArrayViewInner::new(self.chunk, inner_strides))
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducerMut<A, D, D, BIItemArrayViewMut<'a, A, D>>
+        for ProducerExactChunksMut<D>
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayViewMut<A, D>,
+        ) -> (ArrayView<'_, A, D>, BIItemArrayViewInner<D>) {
+            self.0.split_inner_outer(arr.into_view())
+        }
+    }
+
+    //============================= Windows
+    pub struct ProducerWindows<D> {
+        window: D,
+        strides: D,
+    }
+
+    impl<D: Dimension> ProducerWindows<D> {
+        #[inline(always)]
+        pub fn new(window: D, strides: D) -> Self {
+            Self { window, strides }
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D, BIItemArrayView<'a, A, D>>
+        for ProducerWindows<D>
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, D>, BIItemArrayViewInner<D>) {
+            let window_strides = arr.strides.clone();
+
+            ndassert!(
+                arr.ndim() == self.window.ndim(),
+                concat!(
+                    "Window dimension {} does not match array dimension {} ",
+                    "(with array of shape {:?})"
+                ),
+                self.window.ndim(),
+                arr.ndim(),
+                arr.shape()
+            );
+
+            ndassert!(
+                arr.ndim() == self.strides.ndim(),
+                concat!(
+                    "Stride dimension {} does not match array dimension {} ",
+                    "(with array of shape {:?})"
+                ),
+                self.strides.ndim(),
+                arr.ndim(),
+                arr.shape()
+            );
+
+            let mut base = arr;
+            base.slice_each_axis_inplace(|ax_desc| {
+                let len = ax_desc.len;
+                let wsz = self.window[ax_desc.axis.index()];
+                let stride = self.strides[ax_desc.axis.index()];
+
+                if len < wsz {
+                    Slice::new(0, Some(0), 1)
+                } else {
+                    Slice::new(0, Some((len - wsz + 1) as isize), stride as isize)
+                }
+            });
+            (base, BIItemArrayViewInner::new(self.window, window_strides))
+        }
+    }
+    //============================= AxisChunks
+    pub struct ProducerAxisChunks {
+        axis: Axis,
+        size: usize,
+    }
+    pub struct ProducerAxisChunksMut(ProducerAxisChunks);
+    impl ProducerAxisChunks {
+        pub fn new(axis: Axis, size: usize) -> Self {
+            Self { axis, size }
+        }
+    }
+    impl ProducerAxisChunksMut {
+        pub fn new(axis: Axis, size: usize) -> Self {
+            ProducerAxisChunksMut(ProducerAxisChunks { axis, size })
+        }
+    }
+    unsafe impl<'a, A, D: Dimension> BIProducer<A, D, Ix1, BIItemVariableArrayView<'a, A, D>>
+        for ProducerAxisChunks
+    {
+        #[inline]
+        fn split_inner_outer(
+            self,
+            arr: ArrayView<A, D>,
+        ) -> (ArrayView<'_, A, Ix1>, BIItemVariableArrayViewInner<D>) {
+            assert_ne!(self.size, 0, "Chunk size must be nonzero.");
+            let axis_len = arr.len_of(self.axis);
+            let n_whole_chunks = axis_len / self.size;
+            let chunk_remainder = axis_len % self.size;
+            let iter_len = if chunk_remainder == 0 {
+                n_whole_chunks
+            } else {
+                n_whole_chunks + 1
+            };
+            let stride = if n_whole_chunks == 0 {
+                // This case avoids potential overflow when `size > axis_len`.
+                0
+            } else {
+                arr.stride_of(self.axis) * self.size as isize
+            };
+
+            let axis = self.axis.index();
+            let mut inner_dim = arr.dim.clone();
+            inner_dim[axis] = self.size;
+
+            let mut partial_chunk_dim = arr.dim;
+            partial_chunk_dim[axis] = chunk_remainder;
+            unsafe {
+                (
+                    ArrayView::new_(arr.ptr.as_ptr(), Ix1(iter_len), Ix1(stride as usize)),
+                    BIItemVariableArrayViewInner::new(
+                        inner_dim,
+                        arr.strides,
+                        n_whole_chunks,
+                        partial_chunk_dim,
+                    ),
+                )
+            }
+        }
+    }
+    unsafe impl<'a, A, D: Dimension>
+        BIProducerMut<A, D, Ix1, BIItemVariableArrayViewMut<'a, A, D>> for ProducerAxisChunksMut
+    {
+        #[inline(always)]
+        fn split_inner_outer(
+            self,
+            arr: ArrayViewMut<A, D>,
+        ) -> (ArrayView<'_, A, Ix1>, BIItemVariableArrayViewInner<D>) {
+            self.0.split_inner_outer(arr.into_view())
+        }
+    }
+}
+//=================================================================================================
 mod base_iter_0d {
     use super::*;
     impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
@@ -514,6 +837,7 @@ mod base_iter_0d {
                 elems_left: 1,
                 inner,
                 _item: PhantomData,
+                _dim: PhantomData,
             }
         }
 
@@ -584,6 +908,7 @@ mod base_iter_0d {
             elems_left,
             inner,
             _item,
+            _dim,
         }
     );
 }
@@ -1406,18 +1731,6 @@ mod base_iter {
             eitherBI!(self,inner=>inner.len())
         }
     }
-    // impl<A, D: Dimension, IdxA: BIItemT<A, D, false>> BaseIter<A, D, false, IdxA> {
-    //     #[inline]
-    //     pub fn to_indexed<IdxB: BIItemT<A, D, true>>(mut self) -> BaseIter<A, D, true, IdxB> {
-    //         unsafe { (self.borrow_mut() as *mut _ as *mut BaseIter<A, D, true, IdxB>).read() }
-    //     }
-    // }
-    // impl<A, D: Dimension, IdxA: BIItemT<A, D, true>> BaseIter<A, D, true, IdxA> {
-    //     #[inline]
-    //     pub fn to_unindexed<IdxB: BIItemT<A, D, false>>(mut self) -> BaseIter<A, D, false, IdxB> {
-    //         unsafe { (self.borrow_mut() as *mut _ as *mut BaseIter<A, D, false, IdxB>).read() }
-    //     }
-    // }
 }
 impl<A, const IDX: bool, IdxA: BIItemT<A, Ix1, IDX>> NdProducer
     for BaseIter<A, Ix1, IDX, false, IdxA>

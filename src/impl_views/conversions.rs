@@ -12,11 +12,10 @@ use std::mem::MaybeUninit;
 
 use crate::imp_prelude::*;
 
-use crate::iterators::{BIItemT, BIItemRef, BIItemArrayViewInner};
-use crate::BaseIter;
-
 use crate::dimension::offset_from_low_addr_ptr_to_logical_ptr;
-use crate::iter::{self, AxisIter, AxisIterMut};
+use crate::iter::{AxisIter, AxisIterMut, ProducerAxis, ProducerAxisMut};
+use crate::iterators::producer::{BIProducer, BIProducerMut};
+use crate::iterators::{BaseIter};
 use crate::math_cell::MathCell;
 use crate::IndexLonger;
 
@@ -189,27 +188,15 @@ impl<'a, A, D> ArrayView<'a, A, D>
 where
     D: Dimension,
 {
-    #[inline]
-    pub(crate) fn into_iter<const IDX:bool, const SEF:bool, IdxA: BIItemT<A, D, IDX,Inner = () >>(self) -> BaseIter<A, D,IDX, SEF,IdxA> {
-        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
-    }
-
     /// Return an outer iterator for this view.
     #[doc(hidden)] // not official
     #[deprecated(note = "This method will be replaced.")]
-    pub fn into_outer_iter(self) -> iter::AxisIter<'a, A, D::Smaller>
+    pub fn into_outer_iter(self) -> AxisIter<'a, A, D::Smaller>
     where
         D: RemoveAxis,
     {
-        let v = self.view();
-        unsafe {
-            AxisIter::new(
-                v.ptr.as_ptr(),
-                Ix1(v.dim.axis(Axis(0))),
-                Ix1(v.strides.axis(Axis(0))),
-                BIItemArrayViewInner::new(v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
-            )
-        }
+        let (outer, inner) = ProducerAxis::new(Axis(0)).split_inner_outer(self.view());
+        unsafe { BaseIter::new(outer.ptr.as_ptr(), outer.dim, outer.strides, inner) }
     }
 }
 
@@ -225,11 +212,6 @@ where
     /// Converts to a mutable raw array view.
     pub(crate) fn into_raw_view_mut(self) -> RawArrayViewMut<A, D> {
         unsafe { RawArrayViewMut::new(self.ptr, self.dim, self.strides) }
-    }
-
-    #[inline]
-    pub(crate) fn into_iter<const IDX:bool, const SEF:bool, IdxA: BIItemT<A, D, IDX ,Inner = ()>>(self) -> BaseIter<A, D, IDX, SEF, IdxA> {
-        unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides,()) }
     }
 
     /// Return the array’s data as a slice, if it is contiguous and in standard order.
@@ -261,18 +243,11 @@ where
     /// Return an outer iterator for this view.
     #[doc(hidden)] // not official
     #[deprecated(note = "This method will be replaced.")]
-    pub fn into_outer_iter(mut self) -> iter::AxisIterMut<'a, A, D::Smaller>
+    pub fn into_outer_iter(mut self) -> AxisIterMut<'a, A, D::Smaller>
     where
         D: RemoveAxis,
     {
-        let v = self.view_mut();
-        unsafe {
-            AxisIterMut::new(
-                v.ptr.as_ptr(),
-                Ix1(v.dim.axis(Axis(0))),
-                Ix1(v.strides.axis(Axis(0))),
-                BIItemArrayViewInner::new(v.dim.remove_axis(Axis(0)), v.strides.remove_axis(Axis(0))),
-            )
-        }
+        let (outer, inner) = ProducerAxisMut::new(Axis(0)).split_inner_outer(self.view_mut());
+        unsafe { BaseIter::new(outer.ptr.as_ptr(), outer.dim, outer.strides, inner) }
     }
 }
