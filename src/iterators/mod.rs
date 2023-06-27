@@ -960,31 +960,14 @@ mod base_iter_1d {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline(always)]
-        pub(crate) fn split_at(self, index: usize) -> (Self, Self) {
+        pub(crate) fn split_at(mut self, index: usize) -> (Self, Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
-            let left = BaseIter1d {
-                index: self.index,
-                dim: self.dim.clone(),
-                strides: self.strides.clone(),
-                ptr: self.ptr,
-                end: mid.clone(),
-                standard_layout: self.standard_layout,
-                inner: self.inner.clone(),
-                _item: self._item,
-            };
-            let right = BaseIter1d {
-                index: mid,
-                dim: self.dim,
-                strides: self.strides,
-                ptr: self.ptr,
-                end: self.end,
-                standard_layout: self.standard_layout,
-                inner: self.inner,
-                _item: self._item,
-            };
-            (left, right)
+            let mut left = self.clone();
+            left.end = mid.clone();
+            self.index = mid;
+            (left, self)
         }
         #[inline]
         pub(crate) fn consume(&mut self) {
@@ -1260,7 +1243,7 @@ mod base_iter_nd {
         /// **Panics** if `index` is strictly greater than the iterator's remaining
         /// length.
         #[inline(always)]
-        pub(crate) fn split_at(self, index: usize) -> (Self, Self) {
+        pub(crate) fn split_at(mut self, index: usize) -> (Self, Self) {
             assert!(index <= self.len());
             let mut mid = self.index.clone();
             self.dim.jump_index_by_unchecked(&mut mid, index);
@@ -1271,36 +1254,15 @@ mod base_iter_nd {
                 D::stride_offset(&mid, &self.strides),
             );
             let right_elems_left = self.len() - index;
-            let left = BaseIterNd {
-                index: self.index,
-                dim: self.dim.clone(),
-                strides: self.strides.clone(),
-                ptr: self.ptr,
-                end: end1,
-                elems_left: index,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
-                offset_front: self.offset_front,
-                offset_back,
-                inner: self.inner.clone(),
-                _item: self._item,
-            }
-            .elems_left_row_calc();
-            let right = BaseIterNd {
-                index: mid,
-                dim: self.dim,
-                strides: self.strides,
-                ptr: self.ptr,
-                end: self.end,
-                elems_left: right_elems_left,
-                elems_left_row: [0; 2],
-                elems_left_row_back_idx: 0,
-                offset_front,
-                offset_back: self.offset_back,
-                inner: self.inner,
-                _item: self._item,
-            }
-            .elems_left_row_calc();
+            let mut right = self.clone();
+            right.index = mid;
+            right.elems_left = right_elems_left;
+            right.offset_front = offset_front;
+            right = right.elems_left_row_calc();
+            self.end = end1;
+            self.elems_left = index;
+            self.offset_back = offset_back;
+            let left = self.elems_left_row_calc();
             (left, right)
         }
         #[inline]
