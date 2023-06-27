@@ -438,6 +438,7 @@ pub struct BIItemArrayViewInner<DI: Dimension> {
     pub strides: DI,
 }
 impl<DI: Dimension> BIItemArrayViewInner<DI> {
+    #[inline(always)]
     pub fn new(dim: DI, strides: DI) -> Self {
         Self { dim, strides }
     }
@@ -451,6 +452,7 @@ pub struct BIItemVariableArrayViewInner<DI: Dimension> {
 }
 
 impl<DI: Dimension> BIItemVariableArrayViewInner<DI> {
+    #[inline(always)]
     pub fn new(dim: DI, strides: DI, remainder_index: usize, remainder_dim: DI) -> Self {
         Self {
             dim,
@@ -647,7 +649,7 @@ pub mod producer {
     unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D, BIItemArrayView<'a, A, D>>
         for ProducerExactChunks<D>
     {
-        #[inline(always)]
+        #[inline]
         fn split_inner_outer(
             self,
             mut arr: ArrayView<A, D>,
@@ -697,7 +699,7 @@ pub mod producer {
     unsafe impl<'a, A, D: Dimension> BIProducer<A, D, D, BIItemArrayView<'a, A, D>>
         for ProducerWindows<D>
     {
-        #[inline(always)]
+        #[inline]
         fn split_inner_outer(
             self,
             arr: ArrayView<A, D>,
@@ -748,11 +750,13 @@ pub mod producer {
     }
     pub struct ProducerAxisChunksMut(ProducerAxisChunks);
     impl ProducerAxisChunks {
+        #[inline(always)]
         pub fn new(axis: Axis, size: usize) -> Self {
             Self { axis, size }
         }
     }
     impl ProducerAxisChunksMut {
+        #[inline(always)]
         pub fn new(axis: Axis, size: usize) -> Self {
             ProducerAxisChunksMut(ProducerAxisChunks { axis, size })
         }
@@ -800,8 +804,8 @@ pub mod producer {
             }
         }
     }
-    unsafe impl<'a, A, D: Dimension>
-        BIProducerMut<A, D, Ix1, BIItemVariableArrayViewMut<'a, A, D>> for ProducerAxisChunksMut
+    unsafe impl<'a, A, D: Dimension> BIProducerMut<A, D, Ix1, BIItemVariableArrayViewMut<'a, A, D>>
+        for ProducerAxisChunksMut
     {
         #[inline(always)]
         fn split_inner_outer(
@@ -815,7 +819,7 @@ pub mod producer {
 //=================================================================================================
 mod base_iter_0d {
     use super::*;
-    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
         for BaseIter0d<A, D, IDX, IdxA>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -855,7 +859,7 @@ mod base_iter_0d {
             right.elems_left = 0;
             (self, right)
         }
-        #[inline]
+        #[inline(always)]
         pub(crate) fn consume(&mut self) {
             self.elems_left = 0;
         }
@@ -916,7 +920,7 @@ mod base_iter_0d {
 //=================================================================================================
 mod base_iter_1d {
     use super::*;
-    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
         for BaseIter1d<A, D, IDX, IdxA>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -969,7 +973,7 @@ mod base_iter_1d {
             self.index = mid;
             (left, self)
         }
-        #[inline]
+        #[inline(always)]
         pub(crate) fn consume(&mut self) {
             self.index.set_last_elem(self.end.last_elem());
         }
@@ -1053,7 +1057,7 @@ mod base_iter_1d {
             }
             return accum;
         }
-        #[inline]
+        #[inline(always)]
         fn last(mut self) -> Option<Self::Item> {
             let ret = self.next_back();
             self.consume();
@@ -1156,7 +1160,7 @@ mod base_iter_1d {
 mod base_iter_nd {
     use super::*;
 
-    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
         for BaseIterNd<A, D, IDX, IdxA>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1265,7 +1269,7 @@ mod base_iter_nd {
             let left = self.elems_left_row_calc();
             (left, right)
         }
-        #[inline]
+        #[inline(always)]
         pub(crate) fn consume(&mut self) {
             self.elems_left = 0;
             self.elems_left_row = [0, 0];
@@ -1322,7 +1326,7 @@ mod base_iter_nd {
                 stride_h_offset
             );
         }
-        #[inline]
+        #[inline(always)]
         fn last(mut self) -> Option<Self::Item> {
             let ret = self.next_back();
             self.consume();
@@ -1408,7 +1412,7 @@ mod base_iter_nd {
 
 mod base_iter_nd_sef {
     use super::*;
-    impl<A: Debug, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
+    impl<A, D: Dimension, const IDX: bool, IdxA: BIItemT<A, D, IDX>> Debug
         for BaseIterNdSEF<A, D, IDX, IdxA>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1455,7 +1459,7 @@ mod base_iter_nd_sef {
             }
         }
 
-        #[inline]
+        #[inline(always)]
         pub(crate) fn consume(&mut self) {
             self.elems_left = 0;
             self.elems_left_row[0] = 0;
@@ -1511,7 +1515,7 @@ mod base_iter_nd_sef {
                 stride_h_offset
             );
         }
-        #[inline]
+        #[inline(always)]
         fn last(mut self) -> Option<Self::Item> {
             if self.len() != 0 {
                 let mut last_index = self.dim.clone();
@@ -1560,12 +1564,13 @@ mod base_iter {
     impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Clone
         for BaseIter<A, D, IDX, SEF, IdxA>
     {
+        #[inline]
         fn clone(&self) -> Self {
             eitherBIwrapped!(self,inner => inner.clone())
         }
     }
 
-    impl<A: Debug, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Debug
+    impl<A, D: Dimension, const IDX: bool, const SEF: bool, IdxA: BIItemT<A, D, IDX>> Debug
         for BaseIter<A, D, IDX, SEF, IdxA>
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1612,7 +1617,7 @@ mod base_iter {
             inner: IdxA::Inner,
             opt_level: u8,
         ) -> Self {
-            if opt_level > 1 && strides.last_elem() != 1 {
+            if opt_level >= 1 && strides.last_elem() != 1 {
                 move_min_stride_axis_to_last(&mut len, &mut strides);
             }
             Self::new(ptr, len, strides, inner)
@@ -1788,6 +1793,20 @@ pub type Iter<'a, A, D> = BaseIter<A, D, false, false, BIItemRef<'a, A>>;
 ///
 /// See [`.iter_mut()`](ArrayBase::iter_mut) for more information.
 pub type IterMut<'a, A, D> = BaseIter<A, D, false, false, BIItemRefMut<'a, A>>;
+
+/// An iterator over the elements of an array. (slightly faster creation than Iter, but no DoubleEndedIterator)
+///
+/// Iterator element type is `&'a A`.
+///
+/// See [`.iter_sef()`](ArrayBase::iter_sef) for more information.
+pub type IterSEF<'a, A, D> = BaseIter<A, D, false, true, BIItemRef<'a, A>>;
+
+/// An iterator over the elements of an array (mutable). (slightly faster creation than IterMut, but no DoubleEndedIterator)
+///
+/// Iterator element type is `&'a mut A`.
+///
+/// See [`.iter_sef_mut()`](ArrayBase::iter_sef_mut) for more information.
+pub type IterSEFMut<'a, A, D> = BaseIter<A, D, false, true, BIItemRefMut<'a, A>>;
 
 /// An iterator over the indexes and elements of an array.
 ///

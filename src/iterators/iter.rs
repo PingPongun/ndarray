@@ -15,6 +15,6 @@ pub use crate::iterators::producer::{
 };
 pub use crate::iterators::{
     AxisChunksIter, AxisChunksIterMut, AxisIter, AxisIterMut, ExactChunks, ExactChunksIter,
-    ExactChunksIterMut, ExactChunksMut, IndexedIter, IndexedIterMut, Iter, IterMut, Lanes,
-    LanesIter, LanesIterMut, LanesMut, Windows,
+    ExactChunksIterMut, ExactChunksMut, IndexedIter, IndexedIterMut, Iter, IterMut, IterSEF,
+    IterSEFMut, Lanes, LanesIter, LanesIterMut, LanesMut, Windows,
 };

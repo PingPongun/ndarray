@@ -40,7 +40,7 @@ use crate::{arraytraits, DimMax};
 
 use crate::iter::{
     AxisChunksIter, AxisChunksIterMut, AxisIter, AxisIterMut, ExactChunks, ExactChunksMut,
-    IndexedIter, IndexedIterMut, Iter, IterMut, Lanes, LanesMut, Windows,
+    IndexedIter, IndexedIterMut, Iter, IterMut, IterSEF, IterSEFMut, Lanes, LanesMut, Windows,
 };
 use crate::slice::{MultiSliceArg, SliceArg};
 use crate::stacking::concatenate;
@@ -149,6 +149,7 @@ where
     }
 
     /// Return a read-only view of the array
+    #[inline(always)]
     pub fn view(&self) -> ArrayView<'_, A, D>
     where
         S: Data,
@@ -158,6 +159,7 @@ where
     }
 
     /// Return a read-write view of the array
+    #[inline(always)]
     pub fn view_mut(&mut self) -> ArrayViewMut<'_, A, D>
     where
         S: DataMut,
@@ -459,6 +461,36 @@ where
         self.generic_iter_mut(ProducerRefMut())
     }
 
+    /// Return an iterator of references to the elements of the array.
+    /// (slightly faster creation than .iter(), but no DoubleEndedIterator)
+    ///
+    /// Elements are visited in the *logical order* of the array, which
+    /// is where the rightmost index is varying the fastest.
+    ///
+    /// Iterator element type is `&A`.
+    #[inline]
+    pub fn iter_sef(&self) -> IterSEF<'_, A, D>
+    where
+        S: Data,
+    {
+        debug_assert!(self.pointer_is_inbounds());
+        self.generic_iter(ProducerRef())
+    }
+
+    /// Return an iterator of mutable references to the elements of the array.
+    /// (slightly faster creation than .iter_mut(), but no DoubleEndedIterator)
+    ///
+    /// Elements are visited in the *logical order* of the array, which
+    /// is where the rightmost index is varying the fastest.
+    ///
+    /// Iterator element type is `&mut A`.
+    #[inline]
+    pub fn iter_sef_mut(&mut self) -> IterSEFMut<'_, A, D>
+    where
+        S: DataMut,
+    {
+        self.generic_iter_mut(ProducerRefMut())
+    }
     /// Return an generic iterator over the array. Iterating pattern & returned element depends on `target`
     ///
     /// Elements are visited in the *logical order* of the array, which
@@ -482,7 +514,7 @@ where
     /// let iter: IndexedIter<_,_> = a.generic_iter(ProducerRef());//same as a.indexed_iter()
     /// let iter = a.generic_iter::<true,true,_,_,_>(ProducerRef());//same as a.indexed_iter(), but creates slighly faster and does not support DoubleEndedIterator
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn generic_iter<
         const IDX: bool,
         const SEF: bool,
@@ -502,7 +534,7 @@ where
 
     /// Return an mutable generic iterator over the array. Iterating pattern & returned element depends on `target`
     /// See [`ArrayBase::generic_iter`]
-    #[inline]
+    #[inline(always)]
     pub fn generic_iter_mut<
         const IDX: bool,
         const SEF: bool,
@@ -526,7 +558,7 @@ where
     /// higher `opt_level` means stronger optimization (so potentialy faster iteration, but also longer creation time)
     /// `opt_level` == 0 -> no optimization, same as .generic_iter()
     /// `opt_level` == 255 -> max optimization
-    #[inline]
+    #[inline(always)]
     pub fn generic_unordered_iter<
         const IDX: bool,
         const SEF: bool,
@@ -559,7 +591,7 @@ where
     /// higher `opt_level` means stronger optimization (so potentialy faster iteration, but also longer creation time)
     /// `opt_level` == 0 -> no optimization, same as .generic_iter_mut()
     /// `opt_level` == 255 -> max optimization
-    #[inline]
+    #[inline(always)]
     pub fn generic_unordered_iter_mut<
         const IDX: bool,
         const SEF: bool,
@@ -1996,7 +2028,7 @@ where
             };
             Ok(CowArray::from(Array::from_shape_trusted_iter_unchecked(
                 shape,
-                view.generic_iter::<false, true, _, _, _>(ProducerRef()),
+                view.iter_sef(),
                 A::clone,
             )))
         }
@@ -2608,7 +2640,7 @@ where
         A: 'a,
         S: Data,
     {
-        self.generic_unordered_iter::<false, true, _, _, _>(ProducerRef(),1)
+        self.generic_unordered_iter::<false, true, _, _, _>(ProducerRef(), 1)
             .fold(init, f)
     }
 
@@ -2761,8 +2793,8 @@ where
         A: 'a,
         F: FnMut(&'a mut A),
     {
-        self.generic_unordered_iter_mut::<false, true, _, _, _>(ProducerRefMut(),1)
-            .for_each(f);        
+        self.generic_unordered_iter_mut::<false, true, _, _, _>(ProducerRefMut(), 1)
+            .for_each(f);
     }
 
     /// Modify the array in place by calling `f` by **v**alue on each element.

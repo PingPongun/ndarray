@@ -929,6 +929,23 @@ impl Dimension for Dim<[Ix; 2]> {
         true
     }
 
+    #[inline(always)]
+    fn dim_stride_analysis(mut self, mut strides: Self) -> (bool, usize, Self, Self) {
+        if self[1] == 1 {
+            strides[1] = strides[0];
+        }
+        let elem_count = self[0] * self[1];
+        let ss0 = strides[0] as isize == (self[1] as isize * strides[1] as isize);
+        let mut std_layout = false;
+        if ss0 {
+            //stride is contigous
+            std_layout = strides[1] == 1;
+            self[1] = elem_count;
+            self[0] = 1;
+        }
+        (std_layout, elem_count, self, strides)
+    }
+
     #[inline]
     fn next_for(&self, index: Self) -> Option<Self> {
         let mut i = get!(&index, 0);

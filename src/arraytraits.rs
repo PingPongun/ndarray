@@ -211,6 +211,7 @@ where
     type Item = &'a S::Elem;
     type IntoIter = Iter<'a, S::Elem, D>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
@@ -224,6 +225,7 @@ where
     type Item = &'a mut S::Elem;
     type IntoIter = IterMut<'a, S::Elem, D>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter_mut()
     }
@@ -236,6 +238,7 @@ where
     type Item = &'a A;
     type IntoIter = Iter<'a, A, D>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides, ()) }
     }
@@ -248,6 +251,7 @@ where
     type Item = &'a mut A;
     type IntoIter = IterMut<'a, A, D>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         unsafe { BaseIter::new(self.ptr.as_ptr(), self.dim, self.strides, ()) }
     }

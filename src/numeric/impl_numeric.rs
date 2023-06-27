@@ -41,7 +41,7 @@ where
             if let Some(slc) = row.as_slice() {
                 sum = sum + numeric_util::unrolled_fold(slc, A::zero, A::add);
             } else {
-                sum = sum + row.iter().fold(A::zero(), |acc, elt| acc + elt.clone());
+                sum = sum + row.iter_sef().fold(A::zero(), |acc, elt| acc + elt.clone());
             }
         }
         sum

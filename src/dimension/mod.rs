@@ -747,6 +747,7 @@ where
 
 /// Move the axis which has the smallest absolute stride and a length
 /// greater than one to be the last axis.
+#[inline]
 pub fn move_min_stride_axis_to_last<D>(dim: &mut D, strides: &mut D)
 where
     D: Dimension,
